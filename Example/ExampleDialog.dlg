@@ -1,0 +1,26 @@
+@dialog main
+@label start
+Hero: Hello.
+<<set Reputation = 1>>
+* "Ask about work" when Reputation > 0 -> ask_job #id:ask_job
+* "Small talk" -> small_talk
+* "Leave" -> end
+
+@label ask_job
+NPC: I'm a blacksmith.
+<<call side.start>>
+<<jump end>>
+
+@label small_talk
+NPC: Nice weather today.
+<<jump end>>
+
+@label end
+Narrator: See you.
+<<return>>
+
+@dialog side
+@label start
+NPC: Take this.
+<<do GiveItem("sword")>>
+<<return>>

@@ -1,0 +1,15 @@
+{
+  "name": "DialogSystem.Tests",
+  "references": [
+    "DialogSystem.Runtime",
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ]
+}

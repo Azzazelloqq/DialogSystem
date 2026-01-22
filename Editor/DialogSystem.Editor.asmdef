@@ -1,0 +1,9 @@
+{
+  "name": "DialogSystem.Editor",
+  "references": [
+    "DialogSystem.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ]
+}

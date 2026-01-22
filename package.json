@@ -1,0 +1,19 @@
+{
+  "name": "com.azzazello.dialogsystem",
+  "version": "0.1.0",
+  "displayName": "Dialog System",
+  "description": "Hybrid DSL dialog system for Unity.",
+  "unity": "2020.3",
+  "dependencies": {
+  },
+  "keywords": [
+    "Dialog",
+    "Narrative",
+    "VN"
+  ],
+  "author": {
+    "name": "Azzazelloqq",
+    "email": "bog22232@ya.ru",
+    "url": "https://github.com/Azzazelloqq"
+  }
+}
