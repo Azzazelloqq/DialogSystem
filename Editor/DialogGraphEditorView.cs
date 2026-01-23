@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
@@ -12,6 +13,7 @@ public sealed class DialogGraphEditorView : GraphView
 {
     private DialogGraphAsset _asset;
     private readonly Dictionary<string, DialogGraphNodeView> _nodeViews = new();
+    private static readonly Vector2 PasteOffset = new(30f, 30f);
 
     public DialogGraphEditorView()
     {
@@ -21,6 +23,37 @@ public sealed class DialogGraphEditorView : GraphView
         this.AddManipulator(new RectangleSelector());
         Insert(0, new GridBackground());
         graphViewChanged = OnGraphViewChanged;
+        TryBindCopyPasteHandlers();
+    }
+
+    public override List<Port> GetCompatiblePorts(Port startPort, NodeAdapter nodeAdapter)
+    {
+        return ports.ToList()
+            .Where(port => port != startPort &&
+                           port.node != startPort.node &&
+                           port.direction != startPort.direction)
+            .ToList();
+    }
+
+    public override void BuildContextualMenu(ContextualMenuPopulateEvent evt)
+    {
+        base.BuildContextualMenu(evt);
+
+        if (_asset == null)
+        {
+            return;
+        }
+
+        var position = this.ChangeCoordinatesTo(contentViewContainer, evt.localMousePosition);
+        evt.menu.AppendSeparator();
+        evt.menu.AppendAction("Add/Line", _ => CreateNode(DialogGraphNodeType.Line, position));
+        evt.menu.AppendAction("Add/Choice", _ => CreateNode(DialogGraphNodeType.Choice, position));
+        evt.menu.AppendAction("Add/Condition", _ => CreateNode(DialogGraphNodeType.Condition, position));
+        evt.menu.AppendAction("Add/Set", _ => CreateNode(DialogGraphNodeType.Set, position));
+        evt.menu.AppendAction("Add/Command", _ => CreateNode(DialogGraphNodeType.Command, position));
+        evt.menu.AppendAction("Add/Jump", _ => CreateNode(DialogGraphNodeType.Jump, position));
+        evt.menu.AppendAction("Add/Call", _ => CreateNode(DialogGraphNodeType.Call, position));
+        evt.menu.AppendAction("Add/Return", _ => CreateNode(DialogGraphNodeType.Return, position));
     }
 
     public void Load(DialogGraphAsset asset)
@@ -69,6 +102,11 @@ public sealed class DialogGraphEditorView : GraphView
 
     private void CreateNode(DialogGraphNodeType type, Vector2 position)
     {
+        if (type == DialogGraphNodeType.Start)
+        {
+            return;
+        }
+
         RecordUndo("Create Dialog Node");
         var node = new DialogGraphNodeData
         {
@@ -166,9 +204,201 @@ public sealed class DialogGraphEditorView : GraphView
         DeleteElements(elements);
     }
 
+    private string SerializeGraphElementsInternal(IEnumerable<GraphElement> elements)
+    {
+        if (_asset == null)
+        {
+            return string.Empty;
+        }
+
+        var nodeViews = elements.OfType<DialogGraphNodeView>()
+            .Where(view => view.Data.Type != DialogGraphNodeType.Start)
+            .ToList();
+        if (nodeViews.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var copyData = new GraphCopyData
+        {
+            Nodes = nodeViews.Select(view => CloneNode(view.Data)).ToList()
+        };
+
+        return JsonUtility.ToJson(copyData);
+    }
+
+    private bool CanPasteSerializedDataInternal(string data)
+    {
+        return !string.IsNullOrWhiteSpace(data);
+    }
+
+    private void UnserializeAndPasteInternal(string operationName, string data)
+    {
+        if (_asset == null || string.IsNullOrWhiteSpace(data))
+        {
+            return;
+        }
+
+        var copyData = JsonUtility.FromJson<GraphCopyData>(data);
+        if (copyData == null || copyData.Nodes == null || copyData.Nodes.Count == 0)
+        {
+            return;
+        }
+
+        RecordUndo("Paste Dialog Nodes");
+        var idMap = new Dictionary<string, string>();
+        var newNodes = new List<DialogGraphNodeData>();
+
+        foreach (var node in copyData.Nodes)
+        {
+            if (node == null)
+            {
+                continue;
+            }
+
+            var clone = CloneNode(node);
+            var oldId = clone.Id;
+            clone.Id = Guid.NewGuid().ToString("N");
+            clone.Position += PasteOffset;
+            idMap[oldId] = clone.Id;
+            newNodes.Add(clone);
+            _asset.Nodes.Add(clone);
+
+            var view = CreateNodeView(clone);
+            AddElement(view);
+            _nodeViews[clone.Id] = view;
+        }
+
+        foreach (var node in newNodes)
+        {
+            node.NextNodeId = Remap(node.NextNodeId, idMap);
+            node.TargetNodeId = Remap(node.TargetNodeId, idMap);
+            node.TrueNodeId = Remap(node.TrueNodeId, idMap);
+            node.FalseNodeId = Remap(node.FalseNodeId, idMap);
+
+            if (node.Choices == null)
+            {
+                continue;
+            }
+
+            foreach (var choice in node.Choices)
+            {
+                if (choice == null)
+                {
+                    continue;
+                }
+
+                choice.TargetNodeId = Remap(choice.TargetNodeId, idMap);
+            }
+        }
+
+        ConnectEdgesForNodes(newNodes);
+        ClearSelection();
+        foreach (var node in newNodes)
+        {
+            if (_nodeViews.TryGetValue(node.Id, out var view))
+            {
+                AddToSelection(view);
+            }
+        }
+    }
+
+    private void TryBindCopyPasteHandlers()
+    {
+        TrySetDelegate("serializeGraphElements",
+            new Func<IEnumerable<GraphElement>, string>(SerializeGraphElementsInternal));
+        TrySetDelegate("canPasteSerializedData",
+            new Func<string, bool>(CanPasteSerializedDataInternal));
+        TrySetDelegate("unserializeAndPaste",
+            new Action<string, string>(UnserializeAndPasteInternal));
+    }
+
+    private void TrySetDelegate(string memberName, Delegate handler)
+    {
+        var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var field = typeof(GraphView).GetField(memberName, flags);
+        if (field != null)
+        {
+            try
+            {
+                var converted = handler.GetType() == field.FieldType
+                    ? handler
+                    : Delegate.CreateDelegate(field.FieldType, handler.Target, handler.Method);
+                field.SetValue(this, converted);
+                return;
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        var property = typeof(GraphView).GetProperty(memberName, flags);
+        if (property != null && property.CanWrite)
+        {
+            try
+            {
+                var converted = handler.GetType() == property.PropertyType
+                    ? handler
+                    : Delegate.CreateDelegate(property.PropertyType, handler.Target, handler.Method);
+                property.SetValue(this, converted);
+            }
+            catch
+            {
+                // Ignore if signature mismatch.
+            }
+        }
+    }
+
     private void ConnectEdges()
     {
         foreach (var node in _asset.Nodes)
+        {
+            if (node == null || !_nodeViews.TryGetValue(node.Id, out var view))
+            {
+                continue;
+            }
+
+            switch (node.Type)
+            {
+                case DialogGraphNodeType.Start:
+                    Connect(view, DialogPortKind.Entry, node.NextNodeId);
+                    break;
+                case DialogGraphNodeType.Line:
+                case DialogGraphNodeType.Set:
+                case DialogGraphNodeType.Command:
+                    Connect(view, DialogPortKind.Next, node.NextNodeId);
+                    break;
+                case DialogGraphNodeType.Jump:
+                    Connect(view, DialogPortKind.Jump, node.TargetNodeId);
+                    break;
+                case DialogGraphNodeType.Call:
+                    Connect(view, DialogPortKind.CallTarget, node.TargetNodeId);
+                    Connect(view, DialogPortKind.Next, node.NextNodeId);
+                    break;
+                case DialogGraphNodeType.Condition:
+                    Connect(view, DialogPortKind.True, node.TrueNodeId);
+                    Connect(view, DialogPortKind.False, node.FalseNodeId);
+                    break;
+                case DialogGraphNodeType.Choice:
+                    if (node.Choices != null)
+                    {
+                        for (int i = 0; i < node.Choices.Count; i++)
+                        {
+                            var choice = node.Choices[i];
+                            Connect(view, DialogPortKind.Choice, choice?.TargetNodeId, i);
+                        }
+                    }
+
+                    Connect(view, DialogPortKind.Default, node.NextNodeId);
+                    break;
+            }
+        }
+    }
+
+    private void ConnectEdgesForNodes(IEnumerable<DialogGraphNodeData> nodes)
+    {
+        foreach (var node in nodes)
         {
             if (node == null || !_nodeViews.TryGetValue(node.Id, out var view))
             {
@@ -426,6 +656,76 @@ public sealed class DialogGraphEditorView : GraphView
                 }
             }
         }
+    }
+
+    private static DialogGraphNodeData CloneNode(DialogGraphNodeData source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        var clone = new DialogGraphNodeData
+        {
+            Id = source.Id,
+            Type = source.Type,
+            Position = source.Position,
+            Label = source.Label,
+            Speaker = source.Speaker,
+            Text = source.Text,
+            Expression = source.Expression,
+            Variable = source.Variable,
+            StableId = source.StableId,
+            NextNodeId = source.NextNodeId,
+            TargetNodeId = source.TargetNodeId,
+            TargetOverride = source.TargetOverride,
+            TrueNodeId = source.TrueNodeId,
+            FalseNodeId = source.FalseNodeId
+        };
+
+        if (source.Tags != null)
+        {
+            clone.Tags = new List<string>(source.Tags);
+        }
+
+        if (source.Choices != null)
+        {
+            foreach (var choice in source.Choices)
+            {
+                if (choice == null)
+                {
+                    continue;
+                }
+
+                clone.Choices.Add(new DialogGraphChoiceData
+                {
+                    Id = choice.Id,
+                    Text = choice.Text,
+                    Condition = choice.Condition,
+                    TargetNodeId = choice.TargetNodeId,
+                    TargetOverride = choice.TargetOverride,
+                    Tags = choice.Tags == null ? new List<string>() : new List<string>(choice.Tags)
+                });
+            }
+        }
+
+        return clone;
+    }
+
+    private static string Remap(string id, Dictionary<string, string> idMap)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        return idMap.TryGetValue(id, out var newId) ? newId : null;
+    }
+
+    [Serializable]
+    private sealed class GraphCopyData
+    {
+        public List<DialogGraphNodeData> Nodes = new();
     }
 }
 }

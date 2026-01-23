@@ -1,0 +1,6 @@
+@dialog main
+@label start
+Hero: Привет.
+* "Разозлить" -> exit:Angry
+* "Задобрить" -> exit:Happy
+<<exit End>>

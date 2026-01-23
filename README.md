@@ -7,9 +7,13 @@ Designed for deep branching narratives with conditions, jumps, calls, and reusab
 
 - Text DSL (`.dlg`) friendly to git/merge
 - Branching with `if/else`, `when`, `jump`, `call/return`
+- Explicit outcomes via `<<exit>>` for flow graphs
 - C#-style expression language for conditions and commands
+- Custom code conditions (registry)
 - Runtime API for UI integration
 - Editor importer with diagnostics and graph visualization
+- WYSIWYG dialog editor for non-coders
+- Dialog flow graph editor (outcome-based)
 
 ## Quick Start
 
@@ -40,11 +44,11 @@ If there is no speaker, the line is treated as narration.
 ### Choices
 
 ```
-* "Ask about work" when Reputation > 0 -> ask_job
-* "Leave" -> end
+* "Ask about work" when Reputation > 0 -> exit:AskJob
+* "Leave" -> exit:Leave
 ```
 
-Choices are grouped by consecutive `*` lines. `when` is optional. If `-> target` is missing,
+Choices are grouped by consecutive `*` lines. `when` is optional. If `-> exit:Outcome` is missing,
 the dialog continues to the next instruction after the choice block.
 
 ### Commands
@@ -55,6 +59,7 @@ the dialog continues to the next instruction after the choice block.
 <<jump end>>
 <<call side.start>>
 <<return>>
+<<exit Angry>>
 ```
 
 ### Conditional Blocks
@@ -98,6 +103,38 @@ QuestState("main") == "done"
 
 Register functions in code with `DialogContext.RegisterFunction`.
 
+## Code Conditions (Registry)
+
+Create conditions in code and register them:
+
+```csharp
+using DialogSystem.Runtime.Conditions;
+
+public sealed class HasTraitCondition : IDialogCondition
+{
+    public string Id => "HasTrait";
+    public string DisplayName => "Has Trait";
+
+    public bool Evaluate(DialogConditionContext context, DialogConditionArgs args)
+    {
+        // args.Args содержит аргументы
+        return true;
+    }
+}
+```
+
+Register once at startup:
+
+```csharp
+DialogConditionRegistry.Register(new HasTraitCondition());
+```
+
+Then use in DSL:
+
+```
+Hero: Привет. when HasTrait("Brave")
+```
+
 ## Runtime API
 
 - `DialogRunner` drives the dialog and returns `DialogEvent` (`Line`, `Choices`, `End`, `Error`).
@@ -110,6 +147,8 @@ Register functions in code with `DialogContext.RegisterFunction`.
 - `DialogAsset` inspector shows errors and opens the graph view
 - Graph view provides a read-only visualization of flow
 - Visual editor based on `DialogGraph` assets for non-coders
+- Dialog DSL Editor for WYSIWYG editing of `.dlg`
+- Dialog Flow graph editor for outcome-based flow
 
 ## Visual Editor (for non-coders)
 
@@ -122,6 +161,18 @@ Register functions in code with `DialogContext.RegisterFunction`.
 The exported `.dlg` can be versioned and merged in git, while authors work in the editor.
 Each `DialogGraph` asset represents a single `@dialog` section.
 
+## Dialog DSL Editor (WYSIWYG)
+
+Create a **Dialog Draft** asset (**Create → Dialog System → Dialog Draft**) and open it in the editor.
+Open **Window → Dialog System → Dialog DSL Editor**, edit lines/choices/outcomes, then **Export** to `.dlg`.
+Writers never need to edit `.dlg` manually.
+
+## Dialog Flow Graph
+
+Create a `DialogFlow` asset (**Create → Dialog System → Dialog Flow**) and open it via
+**Window → Dialog System → Dialog Flow Editor**. Each dialog node exposes outcomes; connect outcomes
+to other dialogs or action nodes.
+
 ## Example
 
 ```
@@ -129,8 +180,8 @@ Each `DialogGraph` asset represents a single `@dialog` section.
 @label start
 Hero: Hello.
 <<set Reputation = 1>>
-* "Ask about work" when Reputation > 0 -> ask_job
-* "Leave" -> end
+* "Ask about work" when Reputation > 0 -> exit:AskJob
+* "Leave" -> exit:Leave
 
 @label ask_job
 NPC: I'm a blacksmith.

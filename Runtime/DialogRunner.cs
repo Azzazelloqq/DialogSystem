@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DialogSystem.Runtime.Conditions;
 using DialogSystem.Runtime.Expressions;
 
 namespace DialogSystem.Runtime
@@ -85,9 +86,23 @@ public sealed class DialogRunner
             switch (instruction.Type)
             {
                 case DialogInstructionType.Line:
+                    var lineData = new DialogLine(instruction.Speaker, instruction.Text, instruction.Tags, instruction.Id);
+                    if (!string.IsNullOrWhiteSpace(instruction.Condition))
+                    {
+                        if (!TryEvaluateCondition(instruction.Condition, lineData, out var lineAllowed, out var lineError))
+                        {
+                            return SetError(lineError);
+                        }
+
+                        if (!lineAllowed)
+                        {
+                            _instructionIndex++;
+                            continue;
+                        }
+                    }
+
                     _instructionIndex++;
-                    return DialogEvent.LineEvent(new DialogLine(instruction.Speaker, instruction.Text,
-                        instruction.Tags, instruction.Id));
+                    return DialogEvent.LineEvent(lineData);
                 case DialogInstructionType.ChoiceGroup:
                     if (!TryBuildChoices(instruction, out var choices, out var choiceError))
                     {
@@ -104,7 +119,7 @@ public sealed class DialogRunner
                     _choiceInstructionIndex = _instructionIndex;
                     return DialogEvent.ChoicesEvent(new DialogChoiceSet(choices));
                 case DialogInstructionType.If:
-                    if (!TryEvaluateCondition(instruction.Expression, out var condition, out var conditionError))
+                    if (!TryEvaluateCondition(instruction.Expression, default, out var condition, out var conditionError))
                     {
                         return SetError(conditionError);
                     }
@@ -162,6 +177,9 @@ public sealed class DialogRunner
 
                     _instructionIndex++;
                     continue;
+                case DialogInstructionType.Outcome:
+                    _instructionIndex = _currentDialog.Instructions.Count;
+                    return DialogEvent.OutcomeEvent(instruction.Outcome);
                 default:
                     _instructionIndex++;
                     continue;
@@ -188,6 +206,12 @@ public sealed class DialogRunner
 
         if (!string.IsNullOrWhiteSpace(target))
         {
+            if (TryGetOutcomeFromTarget(target, out var outcome))
+            {
+                _instructionIndex = _currentDialog.Instructions.Count;
+                return DialogEvent.OutcomeEvent(outcome);
+            }
+
             if (!TryJumpToTarget(target, out var error))
             {
                 return SetError(error);
@@ -293,7 +317,7 @@ public sealed class DialogRunner
 
             if (!string.IsNullOrWhiteSpace(choice.Condition))
             {
-                if (!TryEvaluateCondition(choice.Condition, out var allowed, out error))
+            if (!TryEvaluateCondition(choice.Condition, default, out var allowed, out error))
                 {
                     return false;
                 }
@@ -310,10 +334,22 @@ public sealed class DialogRunner
         return true;
     }
 
-    private bool TryEvaluateCondition(string expression, out bool result, out string error)
+    private bool TryEvaluateCondition(string conditionText, DialogLine line, out bool result, out string error)
     {
         result = false;
-        if (!DialogExpressionCache.TryGet(expression, out var compiled, out error))
+        error = null;
+        if (DialogConditionRegistry.TryEvaluate(conditionText,
+                new DialogConditionContext(_context, line, _currentDialog?.Id), out result, out error))
+        {
+            return true;
+        }
+
+        if (error != null)
+        {
+            return false;
+        }
+
+        if (!DialogExpressionCache.TryGet(conditionText, out var compiled, out error))
         {
             return false;
         }
@@ -332,6 +368,32 @@ public sealed class DialogRunner
 
         value = compiled.Evaluate(_context, out error);
         return error == null;
+    }
+
+    private static bool TryGetOutcomeFromTarget(string target, out string outcome)
+    {
+        outcome = null;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return false;
+        }
+
+        var trimmed = target.Trim();
+        const string exitPrefix = "exit:";
+        const string outcomePrefix = "outcome:";
+        if (trimmed.StartsWith(exitPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            outcome = trimmed.Substring(exitPrefix.Length).Trim();
+            return !string.IsNullOrWhiteSpace(outcome);
+        }
+
+        if (trimmed.StartsWith(outcomePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            outcome = trimmed.Substring(outcomePrefix.Length).Trim();
+            return !string.IsNullOrWhiteSpace(outcome);
+        }
+
+        return false;
     }
 
     private bool TryCallTarget(string target, out string error)

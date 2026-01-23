@@ -135,6 +135,7 @@ public sealed class DialogGraphView : GraphView
             DialogInstructionType.Return => "return",
             DialogInstructionType.Set => $"{instruction.Variable} = {instruction.Expression}",
             DialogInstructionType.Command => instruction.Expression,
+            DialogInstructionType.Outcome => $"exit {instruction.Outcome}",
             _ => instruction.Type.ToString()
         };
 

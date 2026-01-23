@@ -13,7 +13,8 @@ public enum DialogInstructionType
     Call,
     Return,
     Set,
-    Command
+    Command,
+    Outcome
 }
 
 [Serializable]
@@ -30,6 +31,8 @@ public sealed class DialogInstruction
     [SerializeField] private List<string> _tags = new();
     [SerializeField] private string _id;
     [SerializeField] private bool _internal;
+    [SerializeField] private string _outcome;
+    [SerializeField] private string _condition;
 
     public DialogInstructionType Type => _type;
     public string Speaker => _speaker;
@@ -42,8 +45,10 @@ public sealed class DialogInstruction
     public IReadOnlyList<string> Tags => _tags;
     public string Id => _id;
     public bool IsInternal => _internal;
+    public string Outcome => _outcome;
+    public string Condition => _condition;
 
-    public static DialogInstruction Line(string speaker, string text, string id, List<string> tags)
+    public static DialogInstruction Line(string speaker, string text, string id, List<string> tags, string condition)
     {
         return new DialogInstruction
         {
@@ -51,7 +56,8 @@ public sealed class DialogInstruction
             _speaker = speaker,
             _text = text,
             _id = id,
-            _tags = tags ?? new List<string>()
+            _tags = tags ?? new List<string>(),
+            _condition = condition
         };
     }
 
@@ -119,6 +125,15 @@ public sealed class DialogInstruction
         {
             _type = DialogInstructionType.Command,
             _expression = expression
+        };
+    }
+
+    public static DialogInstruction OutcomeInstruction(string outcome)
+    {
+        return new DialogInstruction
+        {
+            _type = DialogInstructionType.Outcome,
+            _outcome = outcome
         };
     }
 }

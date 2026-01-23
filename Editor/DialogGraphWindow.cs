@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using System.IO;
 using DialogSystem.Runtime;
 using UnityEditor;
 using UnityEditor.UIElements;
+using UnityEngine;
 using UnityEngine.UIElements;
 
 namespace DialogSystem.Editor
@@ -11,6 +13,8 @@ public sealed class DialogGraphWindow : EditorWindow
     private DialogGraphView _graphView;
     private ObjectField _assetField;
     private PopupField<string> _dialogPopup;
+    private HelpBox _infoBox;
+    private Button _createGraphButton;
     private DialogAsset _asset;
     private string _dialogId;
 
@@ -54,6 +58,17 @@ public sealed class DialogGraphWindow : EditorWindow
 
         root.Add(toolbar);
 
+        _infoBox = new HelpBox(
+            "Это окно только для просмотра. Для редактирования используйте Dialog Graph Editor.",
+            HelpBoxMessageType.Info);
+        root.Add(_infoBox);
+
+        _createGraphButton = new Button(CreateGraphFromDialogAsset)
+        {
+            text = "Создать визуальный граф"
+        };
+        root.Add(_createGraphButton);
+
         _graphView = new DialogGraphView();
         _graphView.StretchToParentSize();
         root.Add(_graphView);
@@ -73,6 +88,11 @@ public sealed class DialogGraphWindow : EditorWindow
         if (_assetField != null)
         {
             _assetField.SetValueWithoutNotify(_asset);
+        }
+
+        if (_createGraphButton != null)
+        {
+            _createGraphButton.SetEnabled(_asset != null);
         }
 
         RefreshDialogList();
@@ -128,6 +148,42 @@ public sealed class DialogGraphWindow : EditorWindow
         }
 
         _graphView.LoadDialog(dialog);
+    }
+
+    private void CreateGraphFromDialogAsset()
+    {
+        if (_asset == null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_asset.SourcePath))
+        {
+            EditorUtility.DisplayDialog("Dialog Graph", "Не найден путь исходного .dlg файла.", "OK");
+            return;
+        }
+
+        var defaultDirectory = Path.GetDirectoryName(_asset.SourcePath);
+        var defaultName = $"{_asset.name}Graph";
+        var path = EditorUtility.SaveFilePanelInProject("Create Dialog Graph", defaultName, "asset",
+            "Create a visual dialog graph asset.", defaultDirectory);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        var graph = ScriptableObject.CreateInstance<DialogGraphAsset>();
+        graph.DialogId = _asset.GetDefaultDialog()?.Id ?? "main";
+        graph.DslPath = _asset.SourcePath;
+        AssetDatabase.CreateAsset(graph, path);
+        AssetDatabase.SaveAssets();
+
+        if (!DialogGraphImportUtility.Import(graph, out var error))
+        {
+            EditorUtility.DisplayDialog("Dialog Graph", error ?? "Import failed.", "OK");
+        }
+
+        DialogGraphEditorWindow.Open(graph);
     }
 }
 }

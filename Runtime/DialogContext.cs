@@ -9,6 +9,8 @@ public interface IDialogContext
     void SetVariable(string name, object value);
     bool TryCallFunction(string name, IReadOnlyList<object> args, out object result);
     bool TryResolveDialog(string dialogId, out DialogDefinition dialog);
+    bool TryGetService<T>(out T service) where T : class;
+    void RegisterService<T>(T service) where T : class;
 }
 
 public sealed class DialogContext : IDialogContext
@@ -18,6 +20,7 @@ public sealed class DialogContext : IDialogContext
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DialogDefinition> _dialogs =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Type, object> _services = new();
 
     public bool TryGetVariable(string name, out object value)
     {
@@ -95,6 +98,28 @@ public sealed class DialogContext : IDialogContext
 
             _dialogs[dialog.Id] = dialog;
         }
+    }
+
+    public bool TryGetService<T>(out T service) where T : class
+    {
+        if (_services.TryGetValue(typeof(T), out var stored))
+        {
+            service = stored as T;
+            return service != null;
+        }
+
+        service = null;
+        return false;
+    }
+
+    public void RegisterService<T>(T service) where T : class
+    {
+        if (service == null)
+        {
+            return;
+        }
+
+        _services[typeof(T)] = service;
     }
 }
 }

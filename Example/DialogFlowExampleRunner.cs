@@ -1,28 +1,22 @@
 using DialogSystem.Runtime;
+using DialogSystem.Runtime.Flow;
 using UnityEngine;
 
 namespace DialogSystem.Example
 {
-public sealed class DialogExampleRunner : MonoBehaviour
+public sealed class DialogFlowExampleRunner : MonoBehaviour, IDialogFlowActionHandler
 {
-    [SerializeField] private DialogAsset _asset;
+    [SerializeField] private DialogFlowAsset _flow;
+    [SerializeField] private DialogAsset _dialogAsset;
 
-    private DialogRunner _runner;
-    private DialogContext _context;
+    private DialogFlowRunner _runner;
     private DialogChoiceSet _pendingChoices;
 
     private void Start()
     {
-        _context = new DialogContext();
-        _context.RegisterFunction("GiveItem", args =>
-        {
-            var item = args.Count > 0 ? args[0]?.ToString() : "(unknown)";
-            Debug.Log($"[Dialog] GiveItem: {item}");
-            return null;
-        });
-
-        _runner = new DialogRunner(_asset, _context);
-        HandleEvent(_runner.Start("main"));
+        _runner = new DialogFlowRunner(_flow, _dialogAsset);
+        _runner.ActionHandler = this;
+        HandleEvent(_runner.Start());
     }
 
     private void Update()
@@ -69,17 +63,19 @@ public sealed class DialogExampleRunner : MonoBehaviour
                 break;
             case DialogEventType.End:
                 _pendingChoices = null;
-                Debug.Log("[Dialog] End.");
-                break;
-            case DialogEventType.Outcome:
-                _pendingChoices = null;
-                Debug.Log($"[Dialog] Outcome: {dialogEvent.Outcome}");
+                Debug.Log("[DialogFlow] End.");
                 break;
             case DialogEventType.Error:
                 _pendingChoices = null;
-                Debug.LogError($"[Dialog] Error: {dialogEvent.Error}");
+                Debug.LogError($"[DialogFlow] Error: {dialogEvent.Error}");
                 break;
         }
+    }
+
+    public DialogFlowActionResult Handle(DialogFlowActionRequest request)
+    {
+        Debug.Log($"[DialogFlow] Action: {request.ActionId} ({request.Payload})");
+        return DialogFlowActionResult.Continue(null);
     }
 }
 }

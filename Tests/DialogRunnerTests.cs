@@ -62,5 +62,23 @@ public sealed class DialogRunnerTests
         Assert.AreEqual(DialogEventType.Line, evt.Type);
         Assert.AreEqual("B", evt.Line.Text);
     }
+
+    [Test]
+    public void Runner_ExitCommand_ReturnsOutcome()
+    {
+        const string text = "@dialog main\n" +
+                            "@label start\n" +
+                            "<<exit Angry>>\n";
+
+        var result = DialogDslParser.Parse(text, "test");
+        var asset = ScriptableObject.CreateInstance<DialogAsset>();
+        asset.SetData("test", result.Dialogs, result.Errors);
+
+        var runner = new DialogRunner(asset, new DialogContext());
+        var evt = runner.Start("main");
+
+        Assert.AreEqual(DialogEventType.Outcome, evt.Type);
+        Assert.AreEqual("Angry", evt.Outcome);
+    }
 }
 }

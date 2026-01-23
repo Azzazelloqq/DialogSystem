@@ -282,6 +282,15 @@ public static class DialogDslParser
                 ValidateExpression(args, lineNumber, rawLine, result);
                 instructions.Add(DialogInstruction.Command(args));
                 break;
+            case "exit":
+                if (string.IsNullOrWhiteSpace(args))
+                {
+                    result.AddError(lineNumber, "Exit command requires an outcome name.", rawLine);
+                    return;
+                }
+
+                instructions.Add(DialogInstruction.OutcomeInstruction(args));
+                break;
             default:
                 result.AddError(lineNumber, $"Unknown command '{command}'.", rawLine);
                 break;
@@ -411,12 +420,15 @@ public static class DialogDslParser
 
         if (!string.IsNullOrWhiteSpace(condition))
         {
-            ValidateExpression(condition, lineNumber, rawLine, result);
+            ValidateCondition(condition, lineNumber, rawLine, result);
         }
 
         if (!string.IsNullOrWhiteSpace(target))
         {
-            pendingTargets.Add(new PendingTarget(target, lineNumber, rawLine));
+            if (!IsOutcomeTarget(target))
+            {
+                pendingTargets.Add(new PendingTarget(target, lineNumber, rawLine));
+            }
         }
 
         var choice = new DialogChoice(text, condition, target, tagInfo.Id, tagInfo.Tags);
@@ -458,13 +470,28 @@ public static class DialogDslParser
             text = content.Substring(colonIndex + 1).Trim();
         }
 
+        string condition = null;
+        var whenIndex = IndexOfKeyword(text, "when");
+        if (whenIndex >= 0)
+        {
+            condition = text.Substring(whenIndex + 4).Trim();
+            text = text.Substring(0, whenIndex).Trim();
+            if (string.IsNullOrWhiteSpace(condition))
+            {
+                result.AddError(lineNumber, "Line condition is empty.", rawLine);
+                return;
+            }
+
+            ValidateCondition(condition, lineNumber, rawLine, result);
+        }
+
         if (string.IsNullOrWhiteSpace(text))
         {
             result.AddError(lineNumber, "Line text is empty.", rawLine);
             return;
         }
 
-        instructions.Add(DialogInstruction.Line(speaker, text, tagInfo.Id, tagInfo.Tags));
+        instructions.Add(DialogInstruction.Line(speaker, text, tagInfo.Id, tagInfo.Tags, condition));
     }
 
     private static void ValidateExpression(string expression, int lineNumber, string rawLine, DialogParseResult result)
@@ -473,6 +500,16 @@ public static class DialogDslParser
         {
             result.AddError(lineNumber, $"Expression error: {error}", rawLine);
         }
+    }
+
+    private static void ValidateCondition(string condition, int lineNumber, string rawLine, DialogParseResult result)
+    {
+        if (DialogSystem.Runtime.Conditions.DialogConditionParser.TryParse(condition, out _))
+        {
+            return;
+        }
+
+        ValidateExpression(condition, lineNumber, rawLine, result);
     }
 
     private static TagInfo ExtractTags(string content, int lineNumber, string rawLine,
@@ -611,6 +648,18 @@ public static class DialogDslParser
         }
 
         return -1;
+    }
+
+    private static bool IsOutcomeTarget(string target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return false;
+        }
+
+        var trimmed = target.Trim();
+        return trimmed.StartsWith("exit:", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("outcome:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ValidateTargets(DialogDefinition dialog, List<PendingTarget> pendingTargets,

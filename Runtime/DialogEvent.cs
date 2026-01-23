@@ -6,6 +6,7 @@ public enum DialogEventType
 {
     Line,
     Choices,
+    Outcome,
     End,
     Error
 }
@@ -57,19 +58,22 @@ public readonly struct DialogEvent
     public readonly DialogEventType Type;
     public readonly DialogLine Line;
     public readonly DialogChoiceSet Choices;
+    public readonly string Outcome;
     public readonly string Error;
 
-    private DialogEvent(DialogEventType type, DialogLine line, DialogChoiceSet choices, string error)
+    private DialogEvent(DialogEventType type, DialogLine line, DialogChoiceSet choices, string outcome, string error)
     {
         Type = type;
         Line = line;
         Choices = choices;
+        Outcome = outcome;
         Error = error;
     }
 
-    public static DialogEvent LineEvent(DialogLine line) => new(DialogEventType.Line, line, null, null);
-    public static DialogEvent ChoicesEvent(DialogChoiceSet choices) => new(DialogEventType.Choices, default, choices, null);
-    public static DialogEvent EndEvent() => new(DialogEventType.End, default, null, null);
-    public static DialogEvent ErrorEvent(string error) => new(DialogEventType.Error, default, null, error);
+    public static DialogEvent LineEvent(DialogLine line) => new(DialogEventType.Line, line, null, null, null);
+    public static DialogEvent ChoicesEvent(DialogChoiceSet choices) => new(DialogEventType.Choices, default, choices, null, null);
+    public static DialogEvent OutcomeEvent(string outcome) => new(DialogEventType.Outcome, default, null, outcome, null);
+    public static DialogEvent EndEvent() => new(DialogEventType.End, default, null, null, null);
+    public static DialogEvent ErrorEvent(string error) => new(DialogEventType.Error, default, null, null, error);
 }
 }
