@@ -15,13 +15,15 @@ public readonly struct DialogLine
 {
     public readonly string Speaker;
     public readonly string Text;
+    public readonly string TextKey;
     public readonly IReadOnlyList<string> Tags;
     public readonly string Id;
 
-    public DialogLine(string speaker, string text, IReadOnlyList<string> tags, string id)
+    public DialogLine(string speaker, string text, string textKey, IReadOnlyList<string> tags, string id)
     {
         Speaker = speaker;
         Text = text;
+        TextKey = textKey;
         Tags = tags;
         Id = id;
     }
@@ -30,13 +32,15 @@ public readonly struct DialogLine
 public readonly struct DialogChoiceOption
 {
     public readonly string Text;
+    public readonly string TextKey;
     public readonly IReadOnlyList<string> Tags;
     public readonly string Id;
     public readonly string Target;
 
-    public DialogChoiceOption(string text, IReadOnlyList<string> tags, string id, string target)
+    public DialogChoiceOption(string text, string textKey, IReadOnlyList<string> tags, string id, string target)
     {
         Text = text;
+        TextKey = textKey;
         Tags = tags;
         Id = id;
         Target = target;

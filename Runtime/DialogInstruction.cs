@@ -33,6 +33,7 @@ public sealed class DialogInstruction
     [SerializeField] private bool _internal;
     [SerializeField] private string _outcome;
     [SerializeField] private string _condition;
+    [SerializeField] private string _textKey;
 
     public DialogInstructionType Type => _type;
     public string Speaker => _speaker;
@@ -47,8 +48,10 @@ public sealed class DialogInstruction
     public bool IsInternal => _internal;
     public string Outcome => _outcome;
     public string Condition => _condition;
+    public string TextKey => _textKey;
 
-    public static DialogInstruction Line(string speaker, string text, string id, List<string> tags, string condition)
+    public static DialogInstruction Line(string speaker, string text, string id, List<string> tags, string condition,
+        string textKey)
     {
         return new DialogInstruction
         {
@@ -57,7 +60,8 @@ public sealed class DialogInstruction
             _text = text,
             _id = id,
             _tags = tags ?? new List<string>(),
-            _condition = condition
+            _condition = condition,
+            _textKey = textKey
         };
     }
 
@@ -142,24 +146,27 @@ public sealed class DialogInstruction
 public sealed class DialogChoice
 {
     [SerializeField] private string _text;
+    [SerializeField] private string _textKey;
     [SerializeField] private string _condition;
     [SerializeField] private string _target;
     [SerializeField] private List<string> _tags = new();
     [SerializeField] private string _id;
 
     public string Text => _text;
+    public string TextKey => _textKey;
     public string Condition => _condition;
     public string Target => _target;
     public IReadOnlyList<string> Tags => _tags;
     public string Id => _id;
 
-    public DialogChoice(string text, string condition, string target, string id, List<string> tags)
+    public DialogChoice(string text, string condition, string target, string id, List<string> tags, string textKey)
     {
         _text = text;
         _condition = condition;
         _target = target;
         _id = id;
         _tags = tags ?? new List<string>();
+        _textKey = textKey;
     }
 }
 

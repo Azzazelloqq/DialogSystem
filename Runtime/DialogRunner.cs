@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using DialogSystem.Runtime.Conditions;
 using DialogSystem.Runtime.Expressions;
+using DialogSystem.Runtime.Text;
 
 namespace DialogSystem.Runtime
 {
@@ -86,7 +87,8 @@ public sealed class DialogRunner
             switch (instruction.Type)
             {
                 case DialogInstructionType.Line:
-                    var lineData = new DialogLine(instruction.Speaker, instruction.Text, instruction.Tags, instruction.Id);
+                    var lineData = new DialogLine(instruction.Speaker, instruction.Text, instruction.TextKey,
+                        instruction.Tags, instruction.Id);
                     if (!string.IsNullOrWhiteSpace(instruction.Condition))
                     {
                         if (!TryEvaluateCondition(instruction.Condition, lineData, out var lineAllowed, out var lineError))
@@ -101,8 +103,16 @@ public sealed class DialogRunner
                         }
                     }
 
+                    if (!DialogTextTemplate.TryResolve(instruction.TextKey, instruction.Text, _context,
+                            out var resolvedText, out var resolveError))
+                    {
+                        return SetError(resolveError);
+                    }
+
+                    var resolvedLine = new DialogLine(instruction.Speaker, resolvedText, instruction.TextKey,
+                        instruction.Tags, instruction.Id);
                     _instructionIndex++;
-                    return DialogEvent.LineEvent(lineData);
+                    return DialogEvent.LineEvent(resolvedLine);
                 case DialogInstructionType.ChoiceGroup:
                     if (!TryBuildChoices(instruction, out var choices, out var choiceError))
                     {
@@ -240,7 +250,7 @@ public sealed class DialogRunner
             foreach (var choice in _pendingChoices)
             {
                 var tags = choice.Tags == null ? null : new List<string>(choice.Tags);
-                pending.Add(new DialogChoiceState(choice.Text, choice.Target, choice.Id, tags));
+                pending.Add(new DialogChoiceState(choice.Text, choice.TextKey, choice.Target, choice.Id, tags));
             }
         }
 
@@ -274,7 +284,7 @@ public sealed class DialogRunner
             _pendingChoices = new List<DialogChoiceOption>();
             foreach (var choice in state.PendingChoices)
             {
-                _pendingChoices.Add(new DialogChoiceOption(choice.Text, choice.Tags, choice.Id, choice.Target));
+                _pendingChoices.Add(new DialogChoiceOption(choice.Text, choice.TextKey, choice.Tags, choice.Id, choice.Target));
             }
 
             _choiceInstructionIndex = _instructionIndex;
@@ -328,7 +338,12 @@ public sealed class DialogRunner
                 }
             }
 
-            choices.Add(new DialogChoiceOption(choice.Text, choice.Tags, choice.Id, choice.Target));
+            if (!DialogTextTemplate.TryResolve(choice.TextKey, choice.Text, _context, out var resolvedText, out error))
+            {
+                return false;
+            }
+
+            choices.Add(new DialogChoiceOption(resolvedText, choice.TextKey, choice.Tags, choice.Id, choice.Target));
         }
 
         return true;

@@ -106,7 +106,7 @@ public static class DialogDslEditorParser
 
             if (trimmed.StartsWith("*", StringComparison.Ordinal))
             {
-                var choice = ParseChoice(trimmed);
+            var choice = ParseChoice(trimmed);
                 if (currentChoiceBlock == null)
                 {
                     currentChoiceBlock = new DialogDslBlock
@@ -207,6 +207,7 @@ public static class DialogDslEditorParser
             Type = source.Type,
             Speaker = source.Speaker,
             Text = source.Text,
+            TextKey = source.TextKey,
             Condition = source.Condition,
             Outcome = source.Outcome,
             StableId = source.StableId,
@@ -227,7 +228,9 @@ public static class DialogDslEditorParser
 
                 clone.Choices.Add(new DialogDslChoice
                 {
+                    Id = choice.Id,
                     Text = choice.Text,
+                    TextKey = choice.TextKey,
                     Condition = choice.Condition,
                     Outcome = choice.Outcome,
                     StableId = choice.StableId,
@@ -250,7 +253,7 @@ public static class DialogDslEditorParser
     private static DialogDslChoice ParseChoice(string trimmed)
     {
         var content = trimmed.Substring(1).TrimStart();
-        var tags = ExtractTags(content, out content, out var stableId);
+        var tags = ExtractTags(content, out content, out var stableId, out var textKey);
 
         string text;
         string remainder;
@@ -309,7 +312,9 @@ public static class DialogDslEditorParser
         outcome = NormalizeOutcome(outcome);
         return new DialogDslChoice
         {
+            Id = Guid.NewGuid().ToString("N"),
             Text = text,
+            TextKey = textKey,
             Condition = condition,
             Outcome = outcome,
             StableId = stableId,
@@ -320,7 +325,7 @@ public static class DialogDslEditorParser
     private static bool TryParseLine(string trimmed, out DialogDslBlock block)
     {
         block = null;
-        var tags = ExtractTags(trimmed, out var content, out var stableId);
+        var tags = ExtractTags(trimmed, out var content, out var stableId, out var textKey);
         if (string.IsNullOrWhiteSpace(content))
         {
             return false;
@@ -359,6 +364,7 @@ public static class DialogDslEditorParser
             Type = DialogDslBlockType.Line,
             Speaker = speaker,
             Text = text,
+            TextKey = textKey,
             Condition = condition,
             StableId = stableId,
             Tags = tags
@@ -427,7 +433,7 @@ public static class DialogDslEditorParser
             line += $" when {block.Condition}";
         }
 
-        return AppendTags(line, block.StableId, block.Tags);
+        return AppendTags(line, block.StableId, block.Tags, block.TextKey);
     }
 
     private static string FormatChoice(DialogDslChoice choice)
@@ -443,13 +449,14 @@ public static class DialogDslEditorParser
             line += $" -> exit:{choice.Outcome}";
         }
 
-        return AppendTags(line, choice.StableId, choice.Tags);
+        return AppendTags(line, choice.StableId, choice.Tags, choice.TextKey);
     }
 
-    private static List<string> ExtractTags(string content, out string cleaned, out string stableId)
+    private static List<string> ExtractTags(string content, out string cleaned, out string stableId, out string textKey)
     {
         var tags = new List<string>();
         stableId = null;
+        textKey = null;
         var endIndex = content.Length;
         var index = endIndex - 1;
 
@@ -482,6 +489,10 @@ public static class DialogDslEditorParser
             {
                 stableId ??= token.Substring(4);
             }
+            else if (token.StartsWith("#loc:", StringComparison.OrdinalIgnoreCase))
+            {
+                textKey ??= token.Substring(5);
+            }
             else if (token.StartsWith("#tag:", StringComparison.OrdinalIgnoreCase))
             {
                 tags.Add(token.Substring(5));
@@ -499,11 +510,16 @@ public static class DialogDslEditorParser
         return tags;
     }
 
-    private static string AppendTags(string line, string stableId, List<string> tags)
+    private static string AppendTags(string line, string stableId, List<string> tags, string textKey)
     {
         if (!string.IsNullOrWhiteSpace(stableId))
         {
             line += $" #id:{stableId}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(textKey))
+        {
+            line += $" #loc:{textKey}";
         }
 
         if (tags != null)

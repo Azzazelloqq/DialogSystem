@@ -11,7 +11,11 @@ public sealed class DialogDraftAssetEditor : UnityEditor.Editor
         var asset = (DialogDraftAsset)target;
 
         EditorGUILayout.LabelField("Dialog Id", asset.DialogId);
-        EditorGUILayout.LabelField("DSL Path", string.IsNullOrWhiteSpace(asset.DslPath) ? "(none)" : asset.DslPath);
+        EditorGUILayout.LabelField("DSL Folder", string.IsNullOrWhiteSpace(asset.DslPath) ? "(none)" : asset.DslPath);
+        asset.LocalizationSettings = (DialogSystem.Runtime.Localization.DialogLocalizationSettings)EditorGUILayout.ObjectField(
+            "Localization Settings", asset.LocalizationSettings, typeof(DialogSystem.Runtime.Localization.DialogLocalizationSettings), false);
+        asset.SpeakerCatalog = (DialogSystem.Runtime.Speakers.DialogSpeakerCatalog)EditorGUILayout.ObjectField(
+            "Speaker Catalog", asset.SpeakerCatalog, typeof(DialogSystem.Runtime.Speakers.DialogSpeakerCatalog), false);
         EditorGUILayout.Space();
 
         if (GUILayout.Button("Open Dialog Editor"))

@@ -50,18 +50,21 @@ public sealed class DialogCallFrame
 public sealed class DialogChoiceState
 {
     [SerializeField] private string _text;
+    [SerializeField] private string _textKey;
     [SerializeField] private string _target;
     [SerializeField] private string _id;
     [SerializeField] private List<string> _tags = new();
 
     public string Text => _text;
+    public string TextKey => _textKey;
     public string Target => _target;
     public string Id => _id;
     public IReadOnlyList<string> Tags => _tags;
 
-    public DialogChoiceState(string text, string target, string id, List<string> tags)
+    public DialogChoiceState(string text, string textKey, string target, string id, List<string> tags)
     {
         _text = text;
+        _textKey = textKey;
         _target = target;
         _id = id;
         _tags = tags ?? new List<string>();

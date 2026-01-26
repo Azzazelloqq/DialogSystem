@@ -20,11 +20,13 @@ public static class DialogDslParser
     {
         public readonly string Id;
         public readonly List<string> Tags;
+        public readonly string TextKey;
 
-        public TagInfo(string id, List<string> tags)
+        public TagInfo(string id, List<string> tags, string textKey)
         {
             Id = id;
             Tags = tags;
+            TextKey = textKey;
         }
     }
 
@@ -431,7 +433,7 @@ public static class DialogDslParser
             }
         }
 
-        var choice = new DialogChoice(text, condition, target, tagInfo.Id, tagInfo.Tags);
+        var choice = new DialogChoice(text, condition, target, tagInfo.Id, tagInfo.Tags, tagInfo.TextKey);
         if (!choiceGroupOpen || instructions.Count == 0 ||
             instructions[instructions.Count - 1].Type != DialogInstructionType.ChoiceGroup)
         {
@@ -491,7 +493,7 @@ public static class DialogDslParser
             return;
         }
 
-        instructions.Add(DialogInstruction.Line(speaker, text, tagInfo.Id, tagInfo.Tags, condition));
+        instructions.Add(DialogInstruction.Line(speaker, text, tagInfo.Id, tagInfo.Tags, condition, tagInfo.TextKey));
     }
 
     private static void ValidateExpression(string expression, int lineNumber, string rawLine, DialogParseResult result)
@@ -517,6 +519,7 @@ public static class DialogDslParser
     {
         var tags = new List<string>();
         string id = null;
+        string textKey = null;
         var endIndex = content.Length;
         var index = endIndex - 1;
 
@@ -557,6 +560,18 @@ public static class DialogDslParser
                     id = value;
                 }
             }
+            else if (token.StartsWith("#loc:", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = token.Substring(5);
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    result.AddError(lineNumber, "Tag #loc requires a value.", rawLine);
+                }
+                else if (textKey == null)
+                {
+                    textKey = value;
+                }
+            }
             else if (token.StartsWith("#tag:", StringComparison.OrdinalIgnoreCase))
             {
                 var value = token.Substring(5);
@@ -587,7 +602,7 @@ public static class DialogDslParser
 
         tags.Reverse();
         cleaned = content.Substring(0, endIndex).TrimEnd();
-        return new TagInfo(id, tags);
+        return new TagInfo(id, tags, textKey);
     }
 
     private static bool TryParseQuotedText(string content, out string text, out string remainder)

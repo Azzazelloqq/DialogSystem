@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using DialogSystem.Editor.Dsl;
 using DialogSystem.Runtime.Conditions;
+using DialogSystem.Runtime.Localization;
+using DialogSystem.Runtime.Speakers;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,13 +13,20 @@ public sealed class DialogDslEditorWindow : EditorWindow
 {
     private const float LeftPanelWidth = 260f;
     private const string DragDataKey = "DialogDslDrag";
+    private const float LineTextMinHeight = 60f;
 
     private DialogDraftAsset _draft;
     private DialogDslDocument _document;
     private Vector2 _scroll;
+    private string _activeLocale;
+    private int _localePopupIndex;
     private bool _blocksFoldout = true;
     private bool _conditionsFoldout = true;
     private bool _advancedFoldout;
+    private bool _speakersFoldout = true;
+    private string _speakerSearch;
+    private string _catalogSearch;
+    private string _newSpeakerName;
 
     private readonly List<DropTarget> _dropTargets = new();
     private static int s_conditionsVersion = -1;
@@ -69,7 +78,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
 
         EditorGUILayout.BeginHorizontal();
         var dslPath = _draft != null ? _draft.DslPath : string.Empty;
-        EditorGUILayout.LabelField("DSL Path", string.IsNullOrWhiteSpace(dslPath) ? "(none)" : dslPath);
+        EditorGUILayout.LabelField("DSL Folder", string.IsNullOrWhiteSpace(dslPath) ? "(none)" : dslPath);
         if (GUILayout.Button("Load", GUILayout.Width(80)))
         {
             LoadFromDraft();
@@ -83,6 +92,367 @@ public sealed class DialogDslEditorWindow : EditorWindow
             PickDslPath();
         }
         EditorGUILayout.EndHorizontal();
+
+        DrawLocalizationHeader();
+        DrawSpeakerSection();
+    }
+
+    private void DrawLocalizationHeader()
+    {
+        if (_draft == null)
+        {
+            return;
+        }
+
+        var settings = _draft.LocalizationSettings;
+        EditorGUILayout.BeginHorizontal();
+        var newSettings = (DialogLocalizationSettings)EditorGUILayout.ObjectField(
+            "Localization Settings", settings, typeof(DialogLocalizationSettings), false);
+        if (newSettings != settings)
+        {
+            Undo.RecordObject(_draft, "Change Localization Settings");
+            _draft.LocalizationSettings = newSettings;
+            EditorUtility.SetDirty(_draft);
+            _activeLocale = null;
+            _localePopupIndex = 0;
+        }
+        EditorGUILayout.EndHorizontal();
+
+        if (settings == null || !settings.EnableLocalization)
+        {
+            _activeLocale = null;
+            _localePopupIndex = 0;
+            return;
+        }
+
+        EnsureLocalizationKeys(_document);
+
+        var locales = settings.Locales;
+        var options = new List<string> { "Base" };
+        foreach (var locale in locales)
+        {
+            if (locale == null || string.IsNullOrWhiteSpace(locale.Code))
+            {
+                continue;
+            }
+
+            var label = string.IsNullOrWhiteSpace(locale.DisplayName)
+                ? locale.Code
+                : $"{locale.DisplayName} ({locale.Code})";
+            options.Add(label);
+        }
+
+        if (_localePopupIndex >= options.Count)
+        {
+            SetLocaleByIndex(0, settings);
+        }
+
+        if (options.Count <= 7)
+        {
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            var toolbarIndex = GUILayout.Toolbar(_localePopupIndex, options.ToArray(), EditorStyles.toolbarButton);
+            if (toolbarIndex != _localePopupIndex)
+            {
+                SetLocaleByIndex(toolbarIndex, settings);
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+        else
+        {
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            if (GUILayout.Toggle(_localePopupIndex == 0, "Base", EditorStyles.toolbarButton))
+            {
+                SetLocaleByIndex(0, settings);
+            }
+
+            var defaultIndex = GetLocaleIndexByCode(settings, settings.DefaultLocale);
+            if (defaultIndex >= 0)
+            {
+                var optionIndex = defaultIndex + 1;
+                var label = $"Default ({settings.DefaultLocale})";
+                if (GUILayout.Toggle(_localePopupIndex == optionIndex, label, EditorStyles.toolbarButton))
+                {
+                    SetLocaleByIndex(optionIndex, settings);
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Locale", GUILayout.Width(50));
+            var newIndex = EditorGUILayout.Popup(_localePopupIndex, options.ToArray());
+            if (newIndex != _localePopupIndex)
+            {
+                SetLocaleByIndex(newIndex, settings);
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+    }
+
+    private void DrawSpeakerSection()
+    {
+        if (_draft == null)
+        {
+            return;
+        }
+
+        _speakersFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_speakersFoldout, "Speakers");
+        if (!_speakersFoldout)
+        {
+            EditorGUILayout.EndFoldoutHeaderGroup();
+            return;
+        }
+
+        EditorGUILayout.BeginVertical("box");
+        var newCatalog = (DialogSpeakerCatalog)EditorGUILayout.ObjectField(
+            "Speaker Catalog", _draft.SpeakerCatalog, typeof(DialogSpeakerCatalog), false);
+        if (newCatalog != _draft.SpeakerCatalog)
+        {
+            Undo.RecordObject(_draft, "Change Speaker Catalog");
+            _draft.SpeakerCatalog = newCatalog;
+            EditorUtility.SetDirty(_draft);
+        }
+
+        DrawSpeakerCatalogList(newCatalog);
+        DrawDialogSpeakersList();
+
+        EditorGUILayout.EndVertical();
+        EditorGUILayout.EndFoldoutHeaderGroup();
+    }
+
+    private void DrawSpeakerCatalogList(DialogSpeakerCatalog catalog)
+    {
+        EditorGUILayout.LabelField("Catalog", EditorStyles.boldLabel);
+        _catalogSearch = EditorGUILayout.TextField("Search", _catalogSearch);
+
+        if (catalog == null || catalog.Speakers == null || catalog.Speakers.Count == 0)
+        {
+            EditorGUILayout.HelpBox("Assign a speaker catalog to add from it.", MessageType.Info);
+            return;
+        }
+
+        foreach (var entry in catalog.Speakers)
+        {
+            if (entry == null)
+            {
+                continue;
+            }
+
+            if (!MatchesSearch(_catalogSearch, entry.Id, entry.DisplayName, entry.Description))
+            {
+                continue;
+            }
+
+            EditorGUILayout.BeginVertical("helpbox");
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(GetSpeakerLabel(entry));
+            if (GUILayout.Button("Add", GUILayout.Width(60)))
+            {
+                AddDialogSpeaker(entry);
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (!string.IsNullOrWhiteSpace(entry.Description))
+            {
+                EditorGUILayout.LabelField(entry.Description, EditorStyles.wordWrappedLabel);
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+    }
+
+    private void DrawDialogSpeakersList()
+    {
+        EnsureDialogSpeakersList();
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Dialog Speakers", EditorStyles.boldLabel);
+        _speakerSearch = EditorGUILayout.TextField("Search", _speakerSearch);
+
+        for (int i = 0; i < _draft.DialogSpeakers.Count; i++)
+        {
+            var speaker = _draft.DialogSpeakers[i];
+            if (!MatchesSearch(_speakerSearch, speaker))
+            {
+                continue;
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            var updated = EditorGUILayout.TextField(speaker);
+            if (!string.Equals(updated, speaker, StringComparison.Ordinal))
+            {
+                _draft.DialogSpeakers[i] = updated;
+                MarkDraftDirty("Edit Dialog Speaker");
+            }
+
+            if (GUILayout.Button("Up", GUILayout.Width(32)) && i > 0)
+            {
+                SwapDialogSpeakers(i, i - 1);
+            }
+            if (GUILayout.Button("Down", GUILayout.Width(50)) && i < _draft.DialogSpeakers.Count - 1)
+            {
+                SwapDialogSpeakers(i, i + 1);
+            }
+            if (GUILayout.Button("Remove", GUILayout.Width(70)))
+            {
+                _draft.DialogSpeakers.RemoveAt(i);
+                MarkDraftDirty("Remove Dialog Speaker");
+                EditorGUILayout.EndHorizontal();
+                break;
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        EditorGUILayout.BeginHorizontal();
+        _newSpeakerName = EditorGUILayout.TextField("Add Speaker", _newSpeakerName);
+        if (GUILayout.Button("Add", GUILayout.Width(60)))
+        {
+            TryAddDialogSpeaker(_newSpeakerName);
+            _newSpeakerName = string.Empty;
+        }
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private void EnsureDialogSpeakersList()
+    {
+        if (_draft.DialogSpeakers != null)
+        {
+            return;
+        }
+
+        _draft.DialogSpeakers = new List<string>();
+        MarkDraftDirty("Init Dialog Speakers");
+    }
+
+    private void AddDialogSpeaker(DialogSpeakerEntry entry)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+
+        var name = !string.IsNullOrWhiteSpace(entry.DisplayName) ? entry.DisplayName.Trim() : entry.Id?.Trim();
+        TryAddDialogSpeaker(name);
+    }
+
+    private void TryAddDialogSpeaker(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        EnsureDialogSpeakersList();
+        foreach (var speaker in _draft.DialogSpeakers)
+        {
+            if (string.Equals(speaker, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        _draft.DialogSpeakers.Add(name.Trim());
+        MarkDraftDirty("Add Dialog Speaker");
+    }
+
+    private void SwapDialogSpeakers(int indexA, int indexB)
+    {
+        if (indexA < 0 || indexB < 0 || indexA >= _draft.DialogSpeakers.Count || indexB >= _draft.DialogSpeakers.Count)
+        {
+            return;
+        }
+
+        var temp = _draft.DialogSpeakers[indexA];
+        _draft.DialogSpeakers[indexA] = _draft.DialogSpeakers[indexB];
+        _draft.DialogSpeakers[indexB] = temp;
+        MarkDraftDirty("Reorder Dialog Speakers");
+    }
+
+    private string DrawSpeakerField(string label, string value)
+    {
+        var speakers = _draft != null ? _draft.DialogSpeakers : null;
+        if (speakers == null || speakers.Count == 0)
+        {
+            return EditorGUILayout.TextField(label, value);
+        }
+
+        var options = new string[speakers.Count + 1];
+        options[0] = "(manual)";
+        for (int i = 0; i < speakers.Count; i++)
+        {
+            options[i + 1] = speakers[i];
+        }
+
+        var selectedIndex = GetSpeakerIndex(value, speakers);
+        var newIndex = EditorGUILayout.Popup(label, selectedIndex, options);
+        if (newIndex != selectedIndex && newIndex > 0)
+        {
+            value = speakers[newIndex - 1];
+        }
+
+        if (newIndex == 0)
+        {
+            value = EditorGUILayout.TextField("Custom Speaker", value);
+        }
+
+        return value;
+    }
+
+    private static int GetSpeakerIndex(string value, List<string> speakers)
+    {
+        if (speakers == null || speakers.Count == 0 || string.IsNullOrWhiteSpace(value))
+        {
+            return 0;
+        }
+
+        for (int i = 0; i < speakers.Count; i++)
+        {
+            if (string.Equals(value, speakers[i], StringComparison.OrdinalIgnoreCase))
+            {
+                return i + 1;
+            }
+        }
+
+        return 0;
+    }
+
+    private static string GetSpeakerLabel(DialogSpeakerEntry entry)
+    {
+        if (entry == null)
+        {
+            return "(none)";
+        }
+
+        if (string.IsNullOrWhiteSpace(entry.DisplayName))
+        {
+            return entry.Id ?? "(unnamed)";
+        }
+
+        if (string.IsNullOrWhiteSpace(entry.Id))
+        {
+            return entry.DisplayName;
+        }
+
+        return $"{entry.DisplayName} ({entry.Id})";
+    }
+
+    private static bool MatchesSearch(string search, params string[] values)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return true;
+        }
+
+        var needle = search.Trim();
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value) &&
+                value.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void DrawLeftPanel()
@@ -137,6 +507,10 @@ public sealed class DialogDslEditorWindow : EditorWindow
         using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
         {
             _scroll = scroll.scrollPosition;
+            if (IsLocalizationActive)
+            {
+                EnsureLocalizationVariant(_activeLocale, false);
+            }
             if (_document.Blocks.Count == 0)
             {
                 var emptyRect = GUILayoutUtility.GetRect(0, 200, GUILayout.ExpandWidth(true));
@@ -185,6 +559,8 @@ public sealed class DialogDslEditorWindow : EditorWindow
         EditorGUILayout.BeginVertical("box");
         EditorGUILayout.BeginHorizontal();
         DrawDragHandle(block, ownerList);
+        var foldoutRect = GUILayoutUtility.GetRect(14, 18, GUILayout.Width(14));
+        block.IsCollapsed = !EditorGUI.Foldout(foldoutRect, !block.IsCollapsed, GUIContent.none, true);
         EditorGUILayout.LabelField(block.Type.ToString(), EditorStyles.boldLabel);
         if (GUILayout.Button("Remove", GUILayout.Width(70)))
         {
@@ -195,11 +571,23 @@ public sealed class DialogDslEditorWindow : EditorWindow
         }
         EditorGUILayout.EndHorizontal();
 
-        if (block.Type == DialogDslBlockType.Line)
+        if (block.Type == DialogDslBlockType.Line && !block.IsCollapsed)
         {
             var dropRect = GUILayoutUtility.GetRect(0, 18, GUILayout.ExpandWidth(true));
+            var target = new DropTarget(dropRect, DropTargetKind.Condition, null, -1, block, null);
+            if (ShouldHighlight(target))
+            {
+                EditorGUI.DrawRect(dropRect, new Color(0.3f, 0.6f, 0.9f, 0.4f));
+            }
             GUI.Box(dropRect, "Drop condition here", EditorStyles.helpBox);
-            _dropTargets.Add(new DropTarget(dropRect, DropTargetKind.Condition, null, -1, block, null));
+            _dropTargets.Add(target);
+        }
+
+        if (block.IsCollapsed)
+        {
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.Space();
+            return;
         }
 
         EditorGUI.indentLevel = depth;
@@ -207,8 +595,24 @@ public sealed class DialogDslEditorWindow : EditorWindow
         switch (block.Type)
         {
             case DialogDslBlockType.Line:
-                block.Speaker = EditorGUILayout.TextField("Speaker", block.Speaker);
-                block.Text = EditorGUILayout.TextField("Text", block.Text);
+                if (IsLocalizationActive)
+                {
+                    EditorGUILayout.LabelField("Base", $"{block.Speaker}: {block.Text}");
+                    var entry = GetOrCreateLineLocalization(block);
+                    EditorGUI.BeginChangeCheck();
+                    entry.Speaker = DrawSpeakerField("Speaker", entry.Speaker);
+                    entry.Text = EditorGUILayout.TextArea(entry.Text, GUILayout.MinHeight(LineTextMinHeight));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        MarkDraftDirty("Edit Localization");
+                    }
+                }
+                else
+                {
+                    block.Speaker = DrawSpeakerField("Speaker", block.Speaker);
+                    block.Text = EditorGUILayout.TextArea(block.Text, GUILayout.MinHeight(LineTextMinHeight));
+                    DrawLocalizationKeyField(block);
+                }
                 block.Condition = DrawConditionField("Condition", block.Condition, block, null);
                 block.StableId = EditorGUILayout.TextField("Line Id", block.StableId);
                 DrawTags(block.Tags);
@@ -242,6 +646,10 @@ public sealed class DialogDslEditorWindow : EditorWindow
         for (int i = 0; i < block.Choices.Count; i++)
         {
             var choice = block.Choices[i];
+            if (string.IsNullOrWhiteSpace(choice.Id))
+            {
+                choice.Id = Guid.NewGuid().ToString("N");
+            }
             EditorGUILayout.BeginVertical("helpbox");
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField($"Choice {i + 1}", EditorStyles.boldLabel);
@@ -255,10 +663,30 @@ public sealed class DialogDslEditorWindow : EditorWindow
             EditorGUILayout.EndHorizontal();
 
             var dropRect = GUILayoutUtility.GetRect(0, 18, GUILayout.ExpandWidth(true));
+            var target = new DropTarget(dropRect, DropTargetKind.Condition, null, -1, null, choice);
+            if (ShouldHighlight(target))
+            {
+                EditorGUI.DrawRect(dropRect, new Color(0.3f, 0.6f, 0.9f, 0.4f));
+            }
             GUI.Box(dropRect, "Drop condition here", EditorStyles.helpBox);
-            _dropTargets.Add(new DropTarget(dropRect, DropTargetKind.Condition, null, -1, null, choice));
+            _dropTargets.Add(target);
 
-            choice.Text = EditorGUILayout.TextField("Text", choice.Text);
+            if (IsLocalizationActive)
+            {
+                EditorGUILayout.LabelField("Base", choice.Text ?? string.Empty);
+                var entry = GetOrCreateChoiceLocalization(choice);
+                EditorGUI.BeginChangeCheck();
+                entry.Text = EditorGUILayout.TextField("Text", entry.Text);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    MarkDraftDirty("Edit Localization");
+                }
+            }
+            else
+            {
+                choice.Text = EditorGUILayout.TextField("Text", choice.Text);
+                DrawLocalizationKeyField(choice);
+            }
             choice.Condition = DrawConditionField("Condition", choice.Condition, null, choice);
             choice.Outcome = EditorGUILayout.TextField("Outcome", choice.Outcome);
             choice.StableId = EditorGUILayout.TextField("Choice Id", choice.StableId);
@@ -268,7 +696,10 @@ public sealed class DialogDslEditorWindow : EditorWindow
 
         if (GUILayout.Button("Add Choice"))
         {
-            block.Choices.Add(new DialogDslChoice());
+            block.Choices.Add(new DialogDslChoice
+            {
+                Id = Guid.NewGuid().ToString("N")
+            });
         }
     }
 
@@ -282,22 +713,31 @@ public sealed class DialogDslEditorWindow : EditorWindow
         block.Condition = DrawConditionField("Condition", block.Condition, block, null);
 
         var dropRect = GUILayoutUtility.GetRect(0, 26, GUILayout.ExpandWidth(true));
+        var target = new DropTarget(dropRect, DropTargetKind.Group, block.Children, block.Children.Count, block, null);
+        if (ShouldHighlight(target))
+        {
+            EditorGUI.DrawRect(dropRect, new Color(0.3f, 0.6f, 0.9f, 0.4f));
+        }
         GUI.Box(dropRect, "Drop blocks here to add into group", EditorStyles.helpBox);
-        _dropTargets.Add(new DropTarget(dropRect, DropTargetKind.Group, block.Children, block.Children.Count, block, null));
+        _dropTargets.Add(target);
 
         EditorGUILayout.Space();
-        DrawBlockList(block.Children, depth + 1);
+        if (!block.IsCollapsed)
+        {
+            DrawBlockList(block.Children, depth + 1);
+        }
     }
 
     private void DrawInsertTarget(List<DialogDslBlock> list, int index, int depth)
     {
         var rect = GUILayoutUtility.GetRect(0, 10, GUILayout.ExpandWidth(true));
-        if (IsDragOver(rect))
+        var target = new DropTarget(rect, DropTargetKind.Insert, list, index, null, null);
+        if (ShouldHighlight(target))
         {
             EditorGUI.DrawRect(rect, new Color(0.3f, 0.6f, 0.9f, 0.4f));
         }
 
-        _dropTargets.Add(new DropTarget(rect, DropTargetKind.Insert, list, index, null, null));
+        _dropTargets.Add(target);
     }
 
     private string DrawConditionField(string label, string value, DialogDslBlock targetBlock, DialogDslChoice targetChoice)
@@ -421,7 +861,9 @@ public sealed class DialogDslEditorWindow : EditorWindow
         {
             ApplyDrop(payload, target);
             DragAndDrop.AcceptDrag();
+            DragAndDrop.SetGenericData(DragDataKey, null);
             evt.Use();
+            Repaint();
         }
     }
 
@@ -571,7 +1013,10 @@ public sealed class DialogDslEditorWindow : EditorWindow
 
         if (type == DialogDslBlockType.ChoiceGroup)
         {
-            block.Choices.Add(new DialogDslChoice());
+            block.Choices.Add(new DialogDslChoice
+            {
+                Id = Guid.NewGuid().ToString("N")
+            });
         }
 
         if (type == DialogDslBlockType.ConditionGroup)
@@ -592,14 +1037,425 @@ public sealed class DialogDslEditorWindow : EditorWindow
         return text.IndexOfAny(new[] { ' ', '+', '-', '*', '/', '=', '>', '<', '&', '|', '!' }) >= 0;
     }
 
-    private static bool IsDragOver(Rect rect)
+    private bool IsLocalizationActive =>
+        _draft != null &&
+        _draft.LocalizationSettings != null &&
+        _draft.LocalizationSettings.EnableLocalization &&
+        !string.IsNullOrWhiteSpace(_activeLocale);
+
+    private string GetLocaleCodeByIndex(DialogLocalizationSettings settings, int index)
     {
-        if (DragAndDrop.GetGenericData(DragDataKey) == null)
+        if (settings == null || settings.Locales == null)
+        {
+            return null;
+        }
+
+        var filtered = new List<DialogLocaleInfo>();
+        foreach (var locale in settings.Locales)
+        {
+            if (locale != null && !string.IsNullOrWhiteSpace(locale.Code))
+            {
+                filtered.Add(locale);
+            }
+        }
+
+        if (index < 0 || index >= filtered.Count)
+        {
+            return null;
+        }
+
+        return filtered[index].Code;
+    }
+
+    private int GetLocaleIndexByCode(DialogLocalizationSettings settings, string code)
+    {
+        if (settings == null || settings.Locales == null || string.IsNullOrWhiteSpace(code))
+        {
+            return -1;
+        }
+
+        var index = 0;
+        foreach (var locale in settings.Locales)
+        {
+            if (locale == null || string.IsNullOrWhiteSpace(locale.Code))
+            {
+                continue;
+            }
+
+            if (string.Equals(locale.Code, code, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+
+            index++;
+        }
+
+        return -1;
+    }
+
+    private void SetLocaleByIndex(int index, DialogLocalizationSettings settings)
+    {
+        _localePopupIndex = Mathf.Max(0, index);
+        if (index <= 0)
+        {
+            _activeLocale = null;
+            return;
+        }
+
+        var localeCode = GetLocaleCodeByIndex(settings, index - 1);
+        if (string.IsNullOrWhiteSpace(localeCode))
+        {
+            _activeLocale = null;
+            _localePopupIndex = 0;
+            return;
+        }
+
+        _activeLocale = localeCode;
+        EnsureLocalizationVariant(localeCode, settings.CloneBaseOnAdd);
+    }
+
+    private void EnsureLocalizationVariant(string locale, bool cloneBase)
+    {
+        if (_draft == null || string.IsNullOrWhiteSpace(locale))
+        {
+            return;
+        }
+
+        var variant = GetOrCreateVariant(locale);
+        SyncLocalizationVariant(variant, cloneBase);
+    }
+
+    private DialogLocalizationVariant GetLocalizationVariant(string locale)
+    {
+        if (_draft == null || string.IsNullOrWhiteSpace(locale))
+        {
+            return null;
+        }
+
+        foreach (var variant in _draft.Localizations)
+        {
+            if (variant != null && string.Equals(variant.Locale, locale, StringComparison.OrdinalIgnoreCase))
+            {
+                return variant;
+            }
+        }
+
+        return null;
+    }
+
+    private DialogLocalizationVariant GetOrCreateVariant(string locale)
+    {
+        var existing = GetLocalizationVariant(locale);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var variant = new DialogLocalizationVariant
+        {
+            Locale = locale
+        };
+        _draft.Localizations.Add(variant);
+        EditorUtility.SetDirty(_draft);
+        return variant;
+    }
+
+    private void SyncLocalizationVariant(DialogLocalizationVariant variant, bool cloneBase)
+    {
+        if (variant == null || _document == null)
+        {
+            return;
+        }
+
+        var blocks = new List<DialogDslBlock>();
+        CollectBlocks(_document.Blocks, blocks);
+        var changed = false;
+        foreach (var block in blocks)
+        {
+            if (block.Type == DialogDslBlockType.Line)
+            {
+                var entry = GetOrCreateLineEntry(variant, GetLineLocalizationKey(block));
+                if (cloneBase)
+                {
+                    if (string.IsNullOrWhiteSpace(entry.Speaker))
+                    {
+                        entry.Speaker = block.Speaker;
+                        changed = true;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(entry.Text))
+                    {
+                        entry.Text = block.Text;
+                        changed = true;
+                    }
+                }
+            }
+
+            if (block.Type == DialogDslBlockType.ChoiceGroup && block.Choices != null)
+            {
+                foreach (var choice in block.Choices)
+                {
+                    if (choice == null)
+                    {
+                        continue;
+                    }
+
+                    var entry = GetOrCreateChoiceEntry(variant, GetChoiceLocalizationKey(choice));
+                    if (cloneBase && string.IsNullOrWhiteSpace(entry.Text))
+                    {
+                        entry.Text = choice.Text;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed)
+        {
+            MarkDraftDirty("Sync Localization");
+        }
+    }
+
+    private void CollectBlocks(List<DialogDslBlock> source, List<DialogDslBlock> output)
+    {
+        if (source == null)
+        {
+            return;
+        }
+
+        foreach (var block in source)
+        {
+            if (block == null)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(block.Id))
+            {
+                block.Id = Guid.NewGuid().ToString("N");
+            }
+
+            output.Add(block);
+            if (block.Children != null && block.Children.Count > 0)
+            {
+                CollectBlocks(block.Children, output);
+            }
+        }
+    }
+
+    private DialogLocalizedLine GetOrCreateLineLocalization(DialogDslBlock block)
+    {
+        if (!IsLocalizationActive || block == null)
+        {
+            return null;
+        }
+
+        var variant = GetOrCreateVariant(_activeLocale);
+        var key = GetLineLocalizationKey(block);
+        return GetOrCreateLineEntry(variant, key);
+    }
+
+    private DialogLocalizedChoice GetOrCreateChoiceLocalization(DialogDslChoice choice)
+    {
+        if (!IsLocalizationActive || choice == null)
+        {
+            return null;
+        }
+
+        var variant = GetOrCreateVariant(_activeLocale);
+        var key = GetChoiceLocalizationKey(choice);
+        return GetOrCreateChoiceEntry(variant, key);
+    }
+
+    private DialogLocalizedLine GetOrCreateLineEntry(DialogLocalizationVariant variant, string blockId)
+    {
+        var existing = FindLineLocalization(variant, blockId);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var entry = new DialogLocalizedLine
+        {
+            BlockId = blockId
+        };
+        variant.Lines.Add(entry);
+        EditorUtility.SetDirty(_draft);
+        return entry;
+    }
+
+    private DialogLocalizedChoice GetOrCreateChoiceEntry(DialogLocalizationVariant variant, string choiceId)
+    {
+        var existing = FindChoiceLocalization(variant, choiceId);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var entry = new DialogLocalizedChoice
+        {
+            ChoiceId = choiceId
+        };
+        variant.Choices.Add(entry);
+        EditorUtility.SetDirty(_draft);
+        return entry;
+    }
+
+    private DialogLocalizedLine FindLineLocalization(DialogLocalizationVariant variant, string blockId)
+    {
+        if (variant == null)
+        {
+            return null;
+        }
+
+        foreach (var entry in variant.Lines)
+        {
+            if (entry != null && string.Equals(entry.BlockId, blockId, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry;
+            }
+        }
+
+        return null;
+    }
+
+    private DialogLocalizedChoice FindChoiceLocalization(DialogLocalizationVariant variant, string choiceId)
+    {
+        if (variant == null)
+        {
+            return null;
+        }
+
+        foreach (var entry in variant.Choices)
+        {
+            if (entry != null && string.Equals(entry.ChoiceId, choiceId, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry;
+            }
+        }
+
+        return null;
+    }
+
+    private string GetLineLocalizationKey(DialogDslBlock block)
+    {
+        if (block == null)
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(block.TextKey) ? block.Id : block.TextKey;
+    }
+
+    private string GetChoiceLocalizationKey(DialogDslChoice choice)
+    {
+        if (choice == null)
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(choice.TextKey) ? choice.Id : choice.TextKey;
+    }
+
+    private void DrawLocalizationKeyField(DialogDslBlock block)
+    {
+        var settings = _draft?.LocalizationSettings;
+        if (settings == null || !settings.EnableLocalization || settings.KeyMode == DialogLocalizationKeyMode.None)
+        {
+            return;
+        }
+
+        using (new EditorGUI.DisabledScope(settings.KeyMode == DialogLocalizationKeyMode.Generate))
+        {
+            block.TextKey = EditorGUILayout.TextField("Loc Key", block.TextKey);
+        }
+    }
+
+    private void DrawLocalizationKeyField(DialogDslChoice choice)
+    {
+        var settings = _draft?.LocalizationSettings;
+        if (settings == null || !settings.EnableLocalization || settings.KeyMode == DialogLocalizationKeyMode.None)
+        {
+            return;
+        }
+
+        using (new EditorGUI.DisabledScope(settings.KeyMode == DialogLocalizationKeyMode.Generate))
+        {
+            choice.TextKey = EditorGUILayout.TextField("Loc Key", choice.TextKey);
+        }
+    }
+
+    private DialogDslBlock CloneBlock(DialogDslBlock source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        var clone = new DialogDslBlock
+        {
+            Id = source.Id,
+            Type = source.Type,
+            IsCollapsed = source.IsCollapsed,
+            Speaker = source.Speaker,
+            Text = source.Text,
+            TextKey = source.TextKey,
+            Condition = source.Condition,
+            Outcome = source.Outcome,
+            StableId = source.StableId,
+            Raw = source.Raw,
+            Tags = source.Tags == null ? new List<string>() : new List<string>(source.Tags),
+            Choices = new List<DialogDslChoice>(),
+            Children = new List<DialogDslBlock>()
+        };
+
+        if (source.Choices != null)
+        {
+            foreach (var choice in source.Choices)
+            {
+                if (choice == null)
+                {
+                    continue;
+                }
+
+                clone.Choices.Add(new DialogDslChoice
+                {
+                    Id = choice.Id,
+                    Text = choice.Text,
+                    TextKey = choice.TextKey,
+                    Condition = choice.Condition,
+                    Outcome = choice.Outcome,
+                    StableId = choice.StableId,
+                    Tags = choice.Tags == null ? new List<string>() : new List<string>(choice.Tags)
+                });
+            }
+        }
+
+        if (source.Children != null)
+        {
+            foreach (var child in source.Children)
+            {
+                clone.Children.Add(CloneBlock(child));
+            }
+        }
+
+        return clone;
+    }
+
+    private bool ShouldHighlight(DropTarget target)
+    {
+        var payload = DragAndDrop.GetGenericData(DragDataKey) as DragPayload;
+        if (payload == null)
         {
             return false;
         }
 
-        return rect.Contains(Event.current.mousePosition);
+        if (!target.Rect.Contains(Event.current.mousePosition))
+        {
+            return false;
+        }
+
+        return CanAcceptDrop(payload, target);
     }
 
     private void StartDrag(string label, DragPayload payload)
@@ -734,7 +1590,14 @@ public sealed class DialogDslEditorWindow : EditorWindow
             return;
         }
 
-        var text = System.IO.File.ReadAllText(_draft.DslPath);
+        var basePath = GetExportPath(null);
+        if (string.IsNullOrWhiteSpace(basePath) || !System.IO.File.Exists(basePath))
+        {
+            _document = DialogDslEditorParser.FromDraft(_draft);
+            return;
+        }
+
+        var text = System.IO.File.ReadAllText(basePath);
         _document = DialogDslEditorParser.Parse(text);
         Undo.RecordObject(_draft, "Import Dialog DSL");
         DialogDslEditorParser.ApplyToDraft(_draft, _document);
@@ -745,6 +1608,8 @@ public sealed class DialogDslEditorWindow : EditorWindow
     {
         _draft = asset;
         _document = asset != null ? DialogDslEditorParser.FromDraft(asset) : null;
+        _activeLocale = null;
+        _localePopupIndex = 0;
     }
 
     private void SaveToDsl()
@@ -754,6 +1619,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
             return;
         }
 
+        EnsureLocalizationKeys(_document);
         Undo.RecordObject(_draft, "Save Dialog Draft");
         DialogDslEditorParser.ApplyToDraft(_draft, _document);
         EditorUtility.SetDirty(_draft);
@@ -767,8 +1633,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
             }
         }
 
-        DialogDslEditorParser.Save(_document, _draft.DslPath);
-        AssetDatabase.ImportAsset(_draft.DslPath);
+        ExportAllLanguages();
     }
 
     private void PickDslPath()
@@ -778,16 +1643,356 @@ public sealed class DialogDslEditorWindow : EditorWindow
             return;
         }
 
-        var path = EditorUtility.SaveFilePanelInProject("Dialog DSL", _draft.name, "dlg",
-            "Choose where to save the dialog DSL file.");
-        if (string.IsNullOrWhiteSpace(path))
+        var startFolder = ResolveFolderAbsolute(_draft.DslPath);
+        var chosen = EditorUtility.OpenFolderPanel("Dialog DSL Folder", startFolder, string.Empty);
+        if (string.IsNullOrWhiteSpace(chosen))
         {
             return;
         }
 
+        var relative = FileUtil.GetProjectRelativePath(chosen);
+        if (string.IsNullOrWhiteSpace(relative))
+        {
+            EditorUtility.DisplayDialog("Invalid Folder",
+                "Please choose a folder inside the Unity project (e.g., under Assets).", "OK");
+            return;
+        }
+
         Undo.RecordObject(_draft, "Set DSL Path");
-        _draft.DslPath = path;
+        _draft.DslPath = relative;
         EditorUtility.SetDirty(_draft);
+    }
+
+    private void MarkDraftDirty(string action)
+    {
+        if (_draft == null)
+        {
+            return;
+        }
+
+        Undo.RecordObject(_draft, action);
+        EditorUtility.SetDirty(_draft);
+    }
+
+    private void ExportAllLanguages()
+    {
+        var settings = _draft.LocalizationSettings;
+        if (settings == null || !settings.EnableLocalization)
+        {
+            ExportSingle(null);
+            return;
+        }
+
+        ExportSingle(null);
+        foreach (var locale in GetLocaleCodes(settings))
+        {
+            ExportSingle(locale);
+        }
+    }
+
+    private void ExportSingle(string locale)
+    {
+        var exportDocument = BuildExportDocument(locale);
+        var exportPath = GetExportPath(locale);
+        if (string.IsNullOrWhiteSpace(exportPath))
+        {
+            return;
+        }
+
+        EnsureExportFolder();
+        DialogDslEditorParser.Save(exportDocument, exportPath);
+        AssetDatabase.ImportAsset(exportPath);
+    }
+
+    private DialogDslDocument BuildExportDocument(string locale)
+    {
+        if (string.IsNullOrWhiteSpace(locale))
+        {
+            return CloneDocument(_document);
+        }
+
+        return BuildLocalizedDocument(locale);
+    }
+
+    private string GetExportPath(string locale)
+    {
+        if (_draft == null)
+        {
+            return string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(locale))
+        {
+            return BuildExportPathWithSuffix(null);
+        }
+
+        var settings = _draft.LocalizationSettings;
+        var suffix = settings != null && !string.IsNullOrWhiteSpace(settings.LocalizedDslSuffix)
+            ? settings.LocalizedDslSuffix
+            : ".{locale}";
+        if (!suffix.Contains("{locale}", StringComparison.OrdinalIgnoreCase))
+        {
+            suffix += ".{locale}";
+        }
+        suffix = suffix.Replace("{locale}", locale);
+
+        return BuildExportPathWithSuffix(suffix);
+    }
+
+    private string BuildExportPathWithSuffix(string suffix)
+    {
+        if (_draft == null)
+        {
+            return string.Empty;
+        }
+
+        var folder = _draft.DslPath;
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return string.Empty;
+        }
+
+        var dialogId = _document != null && !string.IsNullOrWhiteSpace(_document.DialogId)
+            ? _document.DialogId.Trim()
+            : "main";
+        var fileName = SanitizeFileName(dialogId);
+        var extension = ".dlg";
+        var finalName = string.IsNullOrWhiteSpace(suffix) ? fileName : $"{fileName}{suffix}";
+        var relative = System.IO.Path.Combine(folder, $"{finalName}{extension}");
+        return ToProjectRelativePath(relative);
+    }
+
+    private void EnsureExportFolder()
+    {
+        if (_draft == null || string.IsNullOrWhiteSpace(_draft.DslPath))
+        {
+            return;
+        }
+
+        var fullPath = System.IO.Path.GetFullPath(_draft.DslPath);
+        if (!System.IO.Directory.Exists(fullPath))
+        {
+            System.IO.Directory.CreateDirectory(fullPath);
+        }
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "dialog";
+        }
+
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        var builder = new System.Text.StringBuilder(name.Length);
+        foreach (var ch in name)
+        {
+            builder.Append(Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string ResolveFolderAbsolute(string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return System.IO.Path.GetFullPath("Assets");
+        }
+
+        return System.IO.Path.IsPathRooted(folder) ? folder : System.IO.Path.GetFullPath(folder);
+    }
+
+    private static string ToProjectRelativePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var full = System.IO.Path.GetFullPath(path);
+        var relative = FileUtil.GetProjectRelativePath(full);
+        return string.IsNullOrWhiteSpace(relative) ? path : relative;
+    }
+
+    private List<string> GetLocaleCodes(DialogLocalizationSettings settings)
+    {
+        var result = new List<string>();
+        if (settings == null || settings.Locales == null)
+        {
+            return result;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var locale in settings.Locales)
+        {
+            if (locale == null || string.IsNullOrWhiteSpace(locale.Code))
+            {
+                continue;
+            }
+
+            var code = locale.Code.Trim();
+            if (code.Length == 0 || !seen.Add(code))
+            {
+                continue;
+            }
+
+            result.Add(code);
+        }
+
+        return result;
+    }
+
+    private void EnsureLocalizationKeys(DialogDslDocument document)
+    {
+        if (document == null || _draft == null)
+        {
+            return;
+        }
+
+        var settings = _draft.LocalizationSettings;
+        if (settings == null || settings.KeyMode != DialogLocalizationKeyMode.Generate)
+        {
+            return;
+        }
+
+        EnsureKeysInBlocks(document.Blocks, document.DialogId, settings);
+    }
+
+    private void EnsureKeysInBlocks(List<DialogDslBlock> blocks, string dialogId, DialogLocalizationSettings settings)
+    {
+        if (blocks == null)
+        {
+            return;
+        }
+
+        foreach (var block in blocks)
+        {
+            if (block == null)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(block.Id))
+            {
+                block.Id = Guid.NewGuid().ToString("N");
+            }
+
+            if (block.Type == DialogDslBlockType.Line && string.IsNullOrWhiteSpace(block.TextKey))
+            {
+                block.TextKey = GenerateKey(settings, dialogId, block.Id, null, "line");
+            }
+
+            if (block.Type == DialogDslBlockType.ChoiceGroup && block.Choices != null)
+            {
+                foreach (var choice in block.Choices)
+                {
+                    if (choice == null)
+                    {
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(choice.Id))
+                    {
+                        choice.Id = Guid.NewGuid().ToString("N");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(choice.TextKey))
+                    {
+                        choice.TextKey = GenerateKey(settings, dialogId, block.Id, choice.Id, "choice");
+                    }
+                }
+            }
+
+            if (block.Children != null && block.Children.Count > 0)
+            {
+                EnsureKeysInBlocks(block.Children, dialogId, settings);
+            }
+        }
+    }
+
+    private static string GenerateKey(DialogLocalizationSettings settings, string dialogId, string blockId,
+        string choiceId, string type)
+    {
+        var format = settings != null && !string.IsNullOrWhiteSpace(settings.KeyFormat)
+            ? settings.KeyFormat
+            : "{dialogId}.{blockId}";
+
+        return format
+            .Replace("{dialogId}", dialogId ?? string.Empty)
+            .Replace("{blockId}", blockId ?? string.Empty)
+            .Replace("{choiceId}", choiceId ?? string.Empty)
+            .Replace("{type}", type ?? string.Empty);
+    }
+
+    private DialogDslDocument BuildLocalizedDocument(string locale)
+    {
+        var localized = new DialogDslDocument
+        {
+            DialogId = _document.DialogId,
+            Blocks = CloneBlocksWithLocalization(_document.Blocks, locale)
+        };
+        return localized;
+    }
+
+    private List<DialogDslBlock> CloneBlocksWithLocalization(List<DialogDslBlock> source, string locale)
+    {
+        var result = new List<DialogDslBlock>();
+        var variant = GetLocalizationVariant(locale);
+
+        foreach (var block in source)
+        {
+            if (block == null)
+            {
+                continue;
+            }
+
+            var clone = CloneBlock(block);
+            if (block.Type == DialogDslBlockType.Line && variant != null)
+            {
+                var entry = FindLineLocalization(variant, GetLineLocalizationKey(block));
+                if (entry != null)
+                {
+                    clone.Speaker = string.IsNullOrWhiteSpace(entry.Speaker) ? block.Speaker : entry.Speaker;
+                    clone.Text = string.IsNullOrWhiteSpace(entry.Text) ? block.Text : entry.Text;
+                }
+            }
+
+            if (block.Type == DialogDslBlockType.ChoiceGroup && variant != null && clone.Choices != null)
+            {
+                foreach (var choice in clone.Choices)
+                {
+                    if (choice == null)
+                    {
+                        continue;
+                    }
+
+                    var entry = FindChoiceLocalization(variant, GetChoiceLocalizationKey(choice));
+                    if (entry != null && !string.IsNullOrWhiteSpace(entry.Text))
+                    {
+                        choice.Text = entry.Text;
+                    }
+                }
+            }
+
+            if (block.Children != null && block.Children.Count > 0)
+            {
+                clone.Children = CloneBlocksWithLocalization(block.Children, locale);
+            }
+
+            result.Add(clone);
+        }
+
+        return result;
+    }
+
+    private DialogDslDocument CloneDocument(DialogDslDocument document)
+    {
+        return new DialogDslDocument
+        {
+            DialogId = document.DialogId,
+            Blocks = CloneBlocksWithLocalization(document.Blocks, null)
+        };
     }
 
     private enum DragKind
