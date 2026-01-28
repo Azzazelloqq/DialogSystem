@@ -144,22 +144,8 @@ Hero: Привет. when HasTrait("Brave")
 ## Editor Tools
 
 - `.dlg` importer creates `DialogAsset` and reports parse errors
-- `DialogAsset` inspector shows errors and opens the graph view
-- Graph view provides a read-only visualization of flow
-- Visual editor based on `DialogGraph` assets for non-coders
 - Dialog DSL Editor for WYSIWYG editing of `.dlg`
 - Dialog Flow graph editor for outcome-based flow
-
-## Visual Editor (for non-coders)
-
-1. Create `DialogGraph` asset via **Create → Dialog System → Dialog Graph**.
-2. Open it with **Open Visual Editor** in the inspector.
-3. Build the dialog visually with nodes and connections.
-4. Click **Export .dlg** to generate the text DSL file (auto path by default).
-5. If the `.dlg` file was merged manually, use **Import .dlg** to rebuild the graph.
-
-The exported `.dlg` can be versioned and merged in git, while authors work in the editor.
-Each `DialogGraph` asset represents a single `@dialog` section.
 
 ## Dialog DSL Editor (WYSIWYG)
 

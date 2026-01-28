@@ -10,6 +10,8 @@ public sealed class DialogFlowEditorWindow : EditorWindow
     private DialogFlowGraphView _graphView;
     private ObjectField _assetField;
     private DialogFlowAsset _asset;
+    private ToolbarMenu _addMenu;
+    private HelpBox _assetHint;
 
     [MenuItem("Window/Dialog System/Dialog Flow Editor")]
     public static void OpenWindow()
@@ -41,14 +43,17 @@ public sealed class DialogFlowEditorWindow : EditorWindow
         });
         toolbar.Add(_assetField);
 
-        var addMenu = new ToolbarMenu { text = "Add Node" };
-        addMenu.menu.AppendAction("Dialog", _ => _graphView?.CreateNode(DialogFlowNodeType.Dialog));
-        addMenu.menu.AppendAction("Choice", _ => _graphView?.CreateNode(DialogFlowNodeType.Choice));
-        addMenu.menu.AppendAction("Action", _ => _graphView?.CreateNode(DialogFlowNodeType.Action));
-        addMenu.menu.AppendAction("End", _ => _graphView?.CreateNode(DialogFlowNodeType.End));
-        toolbar.Add(addMenu);
+        _addMenu = new ToolbarMenu { text = "Add Node" };
+        _addMenu.menu.AppendAction("Dialog", _ => _graphView?.CreateNode(DialogFlowNodeType.Dialog));
+        _addMenu.menu.AppendAction("Choice", _ => _graphView?.CreateNode(DialogFlowNodeType.Choice));
+        _addMenu.menu.AppendAction("Action", _ => _graphView?.CreateNode(DialogFlowNodeType.Action));
+        _addMenu.menu.AppendAction("End", _ => _graphView?.CreateNode(DialogFlowNodeType.End));
+        toolbar.Add(_addMenu);
 
         root.Add(toolbar);
+
+        _assetHint = new HelpBox("Assign a DialogFlow asset to add nodes.", HelpBoxMessageType.Info);
+        root.Add(_assetHint);
 
         _graphView = new DialogFlowGraphView();
         _graphView.StretchToParentSize();
@@ -59,6 +64,8 @@ public sealed class DialogFlowEditorWindow : EditorWindow
             _assetField.SetValueWithoutNotify(_asset);
             _graphView.Load(_asset);
         }
+
+        UpdateUiState();
     }
 
     private void SetAsset(DialogFlowAsset asset)
@@ -70,6 +77,17 @@ public sealed class DialogFlowEditorWindow : EditorWindow
         }
 
         _graphView?.Load(_asset);
+        UpdateUiState();
+    }
+
+    private void UpdateUiState()
+    {
+        var hasAsset = _asset != null;
+        _addMenu?.SetEnabled(hasAsset);
+        if (_assetHint != null)
+        {
+            _assetHint.style.display = hasAsset ? DisplayStyle.None : DisplayStyle.Flex;
+        }
     }
 }
 }

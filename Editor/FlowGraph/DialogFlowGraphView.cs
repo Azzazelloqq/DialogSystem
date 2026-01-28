@@ -34,6 +34,7 @@ public sealed class DialogFlowGraphView : GraphView
     {
         if (_asset == null)
         {
+            Debug.LogWarning("[DialogFlow] Assign a DialogFlow asset before adding nodes.");
             return;
         }
 
