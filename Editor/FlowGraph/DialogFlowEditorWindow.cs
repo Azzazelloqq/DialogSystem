@@ -31,6 +31,7 @@ public sealed class DialogFlowEditorWindow : EditorWindow
     {
         var root = rootVisualElement;
         root.Clear();
+        root.style.flexDirection = FlexDirection.Column;
 
         var toolbar = new Toolbar();
         _assetField = new ObjectField("Flow")
@@ -56,7 +57,7 @@ public sealed class DialogFlowEditorWindow : EditorWindow
         root.Add(_assetHint);
 
         _graphView = new DialogFlowGraphView();
-        _graphView.StretchToParentSize();
+        _graphView.style.flexGrow = 1f;
         root.Add(_graphView);
 
         if (_asset != null)
