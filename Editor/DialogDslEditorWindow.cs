@@ -24,9 +24,14 @@ public sealed class DialogDslEditorWindow : EditorWindow
     private bool _conditionsFoldout = true;
     private bool _advancedFoldout;
     private bool _speakersFoldout;
+    private bool _settingsFoldout = true;
+    private bool _showPalette = true;
+    private bool _showSettings = true;
     private string _speakerSearch;
     private string _catalogSearch;
     private string _newSpeakerName;
+    private readonly Dictionary<string, bool> _advancedBlockMeta = new();
+    private static Dictionary<DialogDslBlockType, GUIStyle> s_blockHeaderStyles;
 
     private readonly List<DropTarget> _dropTargets = new();
     private static int s_conditionsVersion = -1;
@@ -57,17 +62,23 @@ public sealed class DialogDslEditorWindow : EditorWindow
             return;
         }
 
-        _document.DialogId = EditorGUILayout.TextField("Dialog Id", _document.DialogId);
-
         EditorGUILayout.Space();
-        EditorGUILayout.BeginHorizontal();
-        DrawLeftPanel();
-        DrawRightPanel();
-        EditorGUILayout.EndHorizontal();
+        if (_showPalette)
+        {
+            EditorGUILayout.BeginHorizontal();
+            DrawLeftPanel();
+            DrawRightPanel();
+            EditorGUILayout.EndHorizontal();
+        }
+        else
+        {
+            DrawRightPanel();
+        }
     }
 
     private void DrawHeader()
     {
+        EditorGUILayout.BeginVertical("box");
         EditorGUILayout.BeginHorizontal();
         var newDraft = (DialogDraftAsset)EditorGUILayout.ObjectField("Dialog Draft", _draft, typeof(DialogDraftAsset), false);
         if (newDraft != _draft)
@@ -92,9 +103,30 @@ public sealed class DialogDslEditorWindow : EditorWindow
             PickDslPath();
         }
         EditorGUILayout.EndHorizontal();
+        EditorGUILayout.EndVertical();
 
-        DrawLocalizationHeader();
-        DrawSpeakerSection();
+        EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+        _showSettings = GUILayout.Toggle(_showSettings, "Settings", EditorStyles.toolbarButton);
+        _showPalette = GUILayout.Toggle(_showPalette, "Palette", EditorStyles.toolbarButton);
+        EditorGUILayout.EndHorizontal();
+
+        if (_showSettings)
+        {
+            _settingsFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_settingsFoldout, "Dialog Settings");
+            if (_settingsFoldout)
+            {
+                EditorGUILayout.BeginVertical("box");
+                if (_document != null)
+                {
+                    _document.DialogId = EditorGUILayout.TextField("Dialog Id", _document.DialogId);
+                }
+
+                DrawLocalizationHeader();
+                DrawSpeakerSection();
+                EditorGUILayout.EndVertical();
+            }
+            EditorGUILayout.EndFoldoutHeaderGroup();
+        }
     }
 
     private void DrawLocalizationHeader()
@@ -195,10 +227,9 @@ public sealed class DialogDslEditorWindow : EditorWindow
             return;
         }
 
-        _speakersFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_speakersFoldout, "Speakers");
+        _speakersFoldout = EditorGUILayout.Foldout(_speakersFoldout, "Speakers", true);
         if (!_speakersFoldout)
         {
-            EditorGUILayout.EndFoldoutHeaderGroup();
             return;
         }
 
@@ -214,9 +245,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
 
         DrawSpeakerCatalogList(newCatalog);
         DrawDialogSpeakersList();
-
         EditorGUILayout.EndVertical();
-        EditorGUILayout.EndFoldoutHeaderGroup();
     }
 
     private void DrawSpeakerCatalogList(DialogSpeakerCatalog catalog)
@@ -502,6 +531,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
     {
         EditorGUILayout.BeginVertical(GUILayout.ExpandWidth(true));
 
+        DrawRightToolbar();
         _dropTargets.Clear();
         using (var scroll = new EditorGUILayout.ScrollViewScope(_scroll))
         {
@@ -556,11 +586,16 @@ public sealed class DialogDslEditorWindow : EditorWindow
         }
 
         EditorGUILayout.BeginVertical("box");
-        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.BeginHorizontal(GetBlockHeaderStyle(block.Type));
         DrawDragHandle(block, ownerList);
         var foldoutRect = GUILayoutUtility.GetRect(14, 18, GUILayout.Width(14));
         block.IsCollapsed = !EditorGUI.Foldout(foldoutRect, !block.IsCollapsed, GUIContent.none, true);
-        EditorGUILayout.LabelField(block.Type.ToString(), EditorStyles.boldLabel);
+        EditorGUILayout.LabelField(block.Type.ToString(), EditorStyles.boldLabel, GUILayout.Width(110));
+        var preview = BuildBlockPreview(block);
+        if (!string.IsNullOrWhiteSpace(preview))
+        {
+            GUILayout.Label(preview, EditorStyles.miniLabel, GUILayout.ExpandWidth(true));
+        }
         if (GUILayout.Button("Remove", GUILayout.Width(70)))
         {
             ownerList.RemoveAt(index);
@@ -610,11 +645,18 @@ public sealed class DialogDslEditorWindow : EditorWindow
                 {
                     block.Speaker = DrawSpeakerField("Speaker", block.Speaker);
                     block.Text = EditorGUILayout.TextArea(block.Text, GUILayout.MinHeight(LineTextMinHeight));
-                    DrawLocalizationKeyField(block);
                 }
                 block.Condition = DrawConditionField("Condition", block.Condition, block, null);
-                block.StableId = EditorGUILayout.TextField("Line Id", block.StableId);
-                DrawTags(block.Tags);
+
+                var showMeta = GetBlockMetaFoldout(block.Id);
+                showMeta = EditorGUILayout.Foldout(showMeta, "Advanced", true);
+                SetBlockMetaFoldout(block.Id, showMeta);
+                if (showMeta)
+                {
+                    DrawLocalizationKeyField(block);
+                    block.StableId = EditorGUILayout.TextField("Line Id", block.StableId);
+                    DrawTags(block.Tags);
+                }
                 break;
             case DialogDslBlockType.ChoiceGroup:
                 DrawChoiceGroup(block);
@@ -633,6 +675,33 @@ public sealed class DialogDslEditorWindow : EditorWindow
         EditorGUI.indentLevel = 0;
         EditorGUILayout.EndVertical();
         EditorGUILayout.Space();
+    }
+
+    private void DrawRightToolbar()
+    {
+        EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+        if (GUILayout.Button("Add Line", EditorStyles.toolbarButton))
+        {
+            AddBlock(DialogDslBlockType.Line);
+        }
+        if (GUILayout.Button("Add Condition", EditorStyles.toolbarButton))
+        {
+            AddBlock(DialogDslBlockType.ConditionGroup);
+        }
+        if (GUILayout.Button("Add Exit", EditorStyles.toolbarButton))
+        {
+            AddBlock(DialogDslBlockType.Exit);
+        }
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("Collapse All", EditorStyles.toolbarButton))
+        {
+            SetAllCollapsed(true);
+        }
+        if (GUILayout.Button("Expand All", EditorStyles.toolbarButton))
+        {
+            SetAllCollapsed(false);
+        }
+        EditorGUILayout.EndHorizontal();
     }
 
     private void DrawChoiceGroup(DialogDslBlock block)
@@ -996,6 +1065,160 @@ public sealed class DialogDslEditorWindow : EditorWindow
         }
 
         return text.IndexOfAny(new[] { ' ', '+', '-', '*', '/', '=', '>', '<', '&', '|', '!' }) >= 0;
+    }
+
+    private void AddBlock(DialogDslBlockType type)
+    {
+        if (_document == null)
+        {
+            return;
+        }
+
+        _document.Blocks.Add(CreateBlock(type));
+        Repaint();
+    }
+
+    private void SetAllCollapsed(bool collapsed)
+    {
+        if (_document?.Blocks == null)
+        {
+            return;
+        }
+
+        foreach (var block in _document.Blocks)
+        {
+            SetCollapsedRecursive(block, collapsed);
+        }
+
+        Repaint();
+    }
+
+    private void SetCollapsedRecursive(DialogDslBlock block, bool collapsed)
+    {
+        if (block == null)
+        {
+            return;
+        }
+
+        block.IsCollapsed = collapsed;
+        if (block.Children == null)
+        {
+            return;
+        }
+
+        foreach (var child in block.Children)
+        {
+            SetCollapsedRecursive(child, collapsed);
+        }
+    }
+
+    private bool GetBlockMetaFoldout(string blockId)
+    {
+        if (string.IsNullOrWhiteSpace(blockId))
+        {
+            return false;
+        }
+
+        return _advancedBlockMeta.TryGetValue(blockId, out var value) && value;
+    }
+
+    private void SetBlockMetaFoldout(string blockId, bool value)
+    {
+        if (string.IsNullOrWhiteSpace(blockId))
+        {
+            return;
+        }
+
+        _advancedBlockMeta[blockId] = value;
+    }
+
+    private static string BuildLinePreview(DialogDslBlock block)
+    {
+        if (block == null)
+        {
+            return string.Empty;
+        }
+
+        var speaker = block.Speaker;
+        var text = block.Text;
+        var preview = string.IsNullOrWhiteSpace(speaker) ? text : $"{speaker}: {text}";
+        return Truncate(preview, 60);
+    }
+
+    private static string BuildBlockPreview(DialogDslBlock block)
+    {
+        if (block == null)
+        {
+            return string.Empty;
+        }
+
+        return block.Type switch
+        {
+            DialogDslBlockType.Line => BuildLinePreview(block),
+            DialogDslBlockType.ConditionGroup => Truncate(string.IsNullOrWhiteSpace(block.Condition)
+                ? "if true"
+                : $"if {block.Condition}", 60),
+            DialogDslBlockType.Exit => Truncate(string.IsNullOrWhiteSpace(block.Outcome)
+                ? "exit"
+                : $"exit {block.Outcome}", 60),
+            DialogDslBlockType.Raw => Truncate(block.Raw, 60),
+            _ => string.Empty
+        };
+    }
+
+    private static GUIStyle GetBlockHeaderStyle(DialogDslBlockType type)
+    {
+        s_blockHeaderStyles ??= new Dictionary<DialogDslBlockType, GUIStyle>();
+        if (s_blockHeaderStyles.TryGetValue(type, out var style))
+        {
+            return style;
+        }
+
+        var baseStyle = new GUIStyle(EditorStyles.helpBox)
+        {
+            padding = new RectOffset(6, 6, 4, 4)
+        };
+        baseStyle.normal.background = CreateColorTexture(GetBlockHeaderColor(type));
+        s_blockHeaderStyles[type] = baseStyle;
+        return baseStyle;
+    }
+
+    private static Color GetBlockHeaderColor(DialogDslBlockType type)
+    {
+        return type switch
+        {
+            DialogDslBlockType.Line => new Color(0.22f, 0.45f, 0.75f, 0.35f),
+            DialogDslBlockType.ConditionGroup => new Color(0.75f, 0.55f, 0.15f, 0.35f),
+            DialogDslBlockType.Exit => new Color(0.6f, 0.3f, 0.7f, 0.35f),
+            DialogDslBlockType.Raw => new Color(0.35f, 0.35f, 0.35f, 0.35f),
+            _ => new Color(0.25f, 0.25f, 0.25f, 0.3f)
+        };
+    }
+
+    private static Texture2D CreateColorTexture(Color color)
+    {
+        var tex = new Texture2D(1, 1)
+        {
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        tex.SetPixel(0, 0, color);
+        tex.Apply();
+        return tex;
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value.Substring(0, maxLength - 1) + "…";
     }
 
     private bool IsLocalizationActive =>
