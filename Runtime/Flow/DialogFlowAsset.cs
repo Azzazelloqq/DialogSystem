@@ -8,6 +8,7 @@ public enum DialogFlowNodeType
 {
     Start,
     Dialog,
+    Choice,
     Action,
     End
 }
@@ -26,12 +27,13 @@ public sealed class DialogFlowNodeData
     public DialogFlowNodeType Type;
     public Vector2 Position;
 
-    public string DialogId;
+    public DialogAsset DialogAsset;
     public string ActionId;
     public string Payload;
     public string NextNodeId;
 
     public List<DialogFlowOutcomeData> Outcomes = new();
+    public List<DialogFlowChoiceData> Choices = new();
 
     public bool TryGetOutcomeTarget(string outcome, out string targetNodeId)
     {
@@ -53,6 +55,14 @@ public sealed class DialogFlowNodeData
 
         return false;
     }
+}
+
+[Serializable]
+public sealed class DialogFlowChoiceData
+{
+    public string Id;
+    public string Text;
+    public string TargetNodeId;
 }
 
 [CreateAssetMenu(menuName = "Dialog System/Dialog Flow", fileName = "DialogFlow")]

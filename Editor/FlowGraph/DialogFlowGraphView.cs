@@ -184,6 +184,16 @@ public sealed class DialogFlowGraphView : GraphView
                         }
                     }
                     break;
+                case DialogFlowNodeType.Choice:
+                    if (node.Choices != null)
+                    {
+                        for (int i = 0; i < node.Choices.Count; i++)
+                        {
+                            var choice = node.Choices[i];
+                            Connect(view, DialogFlowPortKind.Choice, choice?.TargetNodeId, i);
+                        }
+                    }
+                    break;
             }
         }
     }
@@ -287,10 +297,18 @@ public sealed class DialogFlowGraphView : GraphView
                 break;
             case DialogFlowPortKind.Outcome:
                 if (fromView.Data.Outcomes != null &&
-                    portData.OutcomeIndex >= 0 &&
-                    portData.OutcomeIndex < fromView.Data.Outcomes.Count)
+                    portData.Index >= 0 &&
+                    portData.Index < fromView.Data.Outcomes.Count)
                 {
-                    fromView.Data.Outcomes[portData.OutcomeIndex].TargetNodeId = toView.Data.Id;
+                    fromView.Data.Outcomes[portData.Index].TargetNodeId = toView.Data.Id;
+                }
+                break;
+            case DialogFlowPortKind.Choice:
+                if (fromView.Data.Choices != null &&
+                    portData.Index >= 0 &&
+                    portData.Index < fromView.Data.Choices.Count)
+                {
+                    fromView.Data.Choices[portData.Index].TargetNodeId = toView.Data.Id;
                 }
                 break;
         }
@@ -316,10 +334,18 @@ public sealed class DialogFlowGraphView : GraphView
                 break;
             case DialogFlowPortKind.Outcome:
                 if (fromView.Data.Outcomes != null &&
-                    portData.OutcomeIndex >= 0 &&
-                    portData.OutcomeIndex < fromView.Data.Outcomes.Count)
+                    portData.Index >= 0 &&
+                    portData.Index < fromView.Data.Outcomes.Count)
                 {
-                    fromView.Data.Outcomes[portData.OutcomeIndex].TargetNodeId = null;
+                    fromView.Data.Outcomes[portData.Index].TargetNodeId = null;
+                }
+                break;
+            case DialogFlowPortKind.Choice:
+                if (fromView.Data.Choices != null &&
+                    portData.Index >= 0 &&
+                    portData.Index < fromView.Data.Choices.Count)
+                {
+                    fromView.Data.Choices[portData.Index].TargetNodeId = null;
                 }
                 break;
         }
@@ -352,16 +378,25 @@ public sealed class DialogFlowGraphView : GraphView
                 node.NextNodeId = null;
             }
 
-            if (node.Outcomes == null)
+            if (node.Outcomes != null)
             {
-                continue;
+                foreach (var outcome in node.Outcomes)
+                {
+                    if (outcome != null && outcome.TargetNodeId == nodeId)
+                    {
+                        outcome.TargetNodeId = null;
+                    }
+                }
             }
 
-            foreach (var outcome in node.Outcomes)
+            if (node.Choices != null)
             {
-                if (outcome != null && outcome.TargetNodeId == nodeId)
+                foreach (var choice in node.Choices)
                 {
-                    outcome.TargetNodeId = null;
+                    if (choice != null && choice.TargetNodeId == nodeId)
+                    {
+                        choice.TargetNodeId = null;
+                    }
                 }
             }
         }

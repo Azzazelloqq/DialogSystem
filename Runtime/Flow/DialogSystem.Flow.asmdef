@@ -1,0 +1,6 @@
+{
+  "name": "DialogSystem.Flow",
+  "references": [
+    "DialogSystem.Runtime"
+  ]
+}

@@ -1,6 +1,7 @@
 {
   "name": "DialogSystem.Example",
   "references": [
-    "DialogSystem.Runtime"
+    "DialogSystem.Runtime",
+    "DialogSystem.Flow"
   ]
 }

@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using DialogSystem.Runtime;
 using DialogSystem.Runtime.Flow;
+using UnityEditor.UIElements;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -28,6 +31,11 @@ public sealed class DialogFlowNodeView : Node
     public Port GetOutputPort(DialogFlowPortKind kind, int outcomeIndex = -1)
     {
         if (kind == DialogFlowPortKind.Outcome)
+        {
+            return outcomeIndex >= 0 && outcomeIndex < _outcomePorts.Count ? _outcomePorts[outcomeIndex].Port : null;
+        }
+
+        if (kind == DialogFlowPortKind.Choice)
         {
             return outcomeIndex >= 0 && outcomeIndex < _outcomePorts.Count ? _outcomePorts[outcomeIndex].Port : null;
         }
@@ -62,6 +70,9 @@ public sealed class DialogFlowNodeView : Node
             case DialogFlowNodeType.Dialog:
                 BuildOutcomePorts();
                 break;
+            case DialogFlowNodeType.Choice:
+                BuildChoicePorts();
+                break;
             case DialogFlowNodeType.Action:
                 AddOutputPort("Next", DialogFlowPortKind.Next);
                 break;
@@ -73,12 +84,10 @@ public sealed class DialogFlowNodeView : Node
         switch (Data.Type)
         {
             case DialogFlowNodeType.Dialog:
-                AddTextField("Dialog Id", Data.DialogId, value =>
-                {
-                    _owner.RecordUndo("Edit Dialog Id");
-                    Data.DialogId = value;
-                });
-                AddOutcomeFields();
+                AddDialogFields();
+                break;
+            case DialogFlowNodeType.Choice:
+                AddChoiceFields();
                 break;
             case DialogFlowNodeType.Action:
                 AddTextField("Action Id", Data.ActionId, value =>
@@ -95,28 +104,69 @@ public sealed class DialogFlowNodeView : Node
         }
     }
 
-    private void AddOutcomeFields()
+    private void AddDialogFields()
     {
-        var addButton = new Button(AddOutcome)
+        var assetField = new ObjectField("Dialog Asset")
         {
-            text = "Add Outcome"
+            objectType = typeof(DialogAsset),
+            value = Data.DialogAsset
         };
-        extensionContainer.Add(addButton);
-
-        if (Data.Outcomes == null)
+        assetField.RegisterValueChangedCallback(evt =>
         {
-            Data.Outcomes = new List<DialogFlowOutcomeData>();
+            _owner.RecordUndo("Edit Dialog Asset");
+            Data.DialogAsset = evt.newValue as DialogAsset;
+            DialogFlowOutcomeUtility.SyncOutcomes(Data);
+            RefreshDialogContent();
+        });
+        extensionContainer.Add(assetField);
+
+        var defaultDialogId = Data.DialogAsset != null ? Data.DialogAsset.GetDefaultDialog()?.Id : null;
+        if (!string.IsNullOrWhiteSpace(defaultDialogId))
+        {
+            extensionContainer.Add(new Label($"Dialog: {defaultDialogId}"));
         }
 
+        var syncButton = new Button(() =>
+        {
+            _owner.RecordUndo("Sync Outcomes");
+            DialogFlowOutcomeUtility.SyncOutcomes(Data);
+            RefreshDialogContent();
+        })
+        {
+            text = "Sync Outcomes"
+        };
+        extensionContainer.Add(syncButton);
+
+        DrawOutcomeSummary();
+    }
+
+    private void RefreshDialogContent()
+    {
+        _outcomePorts.Clear();
+        _ports.Clear();
+        inputContainer.Clear();
+        outputContainer.Clear();
+        extensionContainer.Clear();
+        CreatePorts();
+        BuildFields();
+        RefreshPorts();
+        RefreshExpandedState();
+    }
+
+    private void DrawOutcomeSummary()
+    {
+        if (Data.Outcomes == null || Data.Outcomes.Count == 0)
+        {
+            extensionContainer.Add(new Label("Outcomes: (none)"));
+            return;
+        }
+
+        extensionContainer.Add(new Label("Outcomes:"));
         for (int i = 0; i < Data.Outcomes.Count; i++)
         {
             var outcome = Data.Outcomes[i];
-            var foldout = AddOutcomeRow(outcome, i);
-            var entry = _outcomePorts.FirstOrDefault(item => item.Outcome == outcome);
-            if (entry != null)
-            {
-                entry.Foldout = foldout;
-            }
+            var name = outcome != null && !string.IsNullOrWhiteSpace(outcome.Outcome) ? outcome.Outcome : "(unnamed)";
+            extensionContainer.Add(new Label($"- {name}"));
         }
     }
 
@@ -135,44 +185,87 @@ public sealed class DialogFlowNodeView : Node
         }
     }
 
-    private void AddOutcome()
+    private void AddChoiceFields()
     {
-        _owner.RecordUndo("Add Outcome");
-        var outcome = new DialogFlowOutcomeData
+        var addButton = new Button(AddChoice)
         {
-            Outcome = "Outcome"
+            text = "Add Choice"
         };
-        Data.Outcomes.Add(outcome);
-        var port = AddOutputPort(GetOutcomePortName(outcome, Data.Outcomes.Count - 1), DialogFlowPortKind.Outcome,
-            Data.Outcomes.Count - 1);
-        var entry = new OutcomePortEntry(outcome, port);
+        extensionContainer.Add(addButton);
+
+        if (Data.Choices == null)
+        {
+            Data.Choices = new List<DialogFlowChoiceData>();
+        }
+
+        for (int i = 0; i < Data.Choices.Count; i++)
+        {
+            var choice = Data.Choices[i];
+            var foldout = AddChoiceRow(choice, i);
+            var entry = _outcomePorts.FirstOrDefault(item => item.Port.userData is DialogFlowPortData data &&
+                                                             data.Kind == DialogFlowPortKind.Choice &&
+                                                             data.Index == i);
+            if (entry != null)
+            {
+                entry.Foldout = foldout;
+            }
+        }
+    }
+
+    private void BuildChoicePorts()
+    {
+        if (Data.Choices == null)
+        {
+            Data.Choices = new List<DialogFlowChoiceData>();
+        }
+
+        for (int i = 0; i < Data.Choices.Count; i++)
+        {
+            var choice = Data.Choices[i];
+            var port = AddOutputPort(GetChoicePortName(choice, i), DialogFlowPortKind.Choice, i);
+            _outcomePorts.Add(new OutcomePortEntry(null, port));
+        }
+    }
+
+    private void AddChoice()
+    {
+        _owner.RecordUndo("Add Choice");
+        var choice = new DialogFlowChoiceData
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Text = "Choice"
+        };
+        Data.Choices.Add(choice);
+        var port = AddOutputPort(GetChoicePortName(choice, Data.Choices.Count - 1), DialogFlowPortKind.Choice,
+            Data.Choices.Count - 1);
+        var entry = new OutcomePortEntry(null, port);
         _outcomePorts.Add(entry);
-        entry.Foldout = AddOutcomeRow(outcome, Data.Outcomes.Count - 1);
+        entry.Foldout = AddChoiceRow(choice, Data.Choices.Count - 1);
         RefreshExpandedState();
         RefreshPorts();
     }
 
-    private Foldout AddOutcomeRow(DialogFlowOutcomeData outcome, int index)
+    private Foldout AddChoiceRow(DialogFlowChoiceData choice, int index)
     {
         var foldout = new Foldout
         {
-            text = $"Outcome {index + 1}",
+            text = $"Choice {index + 1}",
             value = false
         };
 
-        var nameField = new TextField("Name");
-        nameField.SetValueWithoutNotify(outcome.Outcome);
-        nameField.RegisterValueChangedCallback(evt =>
+        var textField = new TextField("Text");
+        textField.SetValueWithoutNotify(choice.Text);
+        textField.RegisterValueChangedCallback(evt =>
         {
-            _owner.RecordUndo("Edit Outcome Name");
-            outcome.Outcome = evt.newValue;
-            UpdateOutcomePortLabel(outcome);
+            _owner.RecordUndo("Edit Choice Text");
+            choice.Text = evt.newValue;
+            UpdateChoicePortLabel(choice);
         });
-        foldout.Add(nameField);
+        foldout.Add(textField);
 
-        var removeButton = new Button(() => RemoveOutcome(outcome))
+        var removeButton = new Button(() => RemoveChoice(choice))
         {
-            text = "Remove Outcome"
+            text = "Remove Choice"
         };
         foldout.Add(removeButton);
 
@@ -180,16 +273,18 @@ public sealed class DialogFlowNodeView : Node
         return foldout;
     }
 
-    private void RemoveOutcome(DialogFlowOutcomeData outcome)
+    private void RemoveChoice(DialogFlowChoiceData choice)
     {
-        var index = Data.Outcomes.IndexOf(outcome);
+        var index = Data.Choices.IndexOf(choice);
         if (index < 0)
         {
             return;
         }
 
-        _owner.RecordUndo("Remove Outcome");
-        var entry = _outcomePorts.FirstOrDefault(item => item.Outcome == outcome);
+        _owner.RecordUndo("Remove Choice");
+        var entry = _outcomePorts.FirstOrDefault(item => item.Port.userData is DialogFlowPortData data &&
+                                                         data.Kind == DialogFlowPortKind.Choice &&
+                                                         data.Index == index);
         if (entry != null)
         {
             _owner.RemoveConnections(entry.Port);
@@ -202,37 +297,51 @@ public sealed class DialogFlowNodeView : Node
             _outcomePorts.Remove(entry);
         }
 
-        Data.Outcomes.RemoveAt(index);
-        RefreshOutcomeIndices();
+        Data.Choices.RemoveAt(index);
+        RefreshChoiceIndices();
     }
 
-    private void RefreshOutcomeIndices()
+    private void RefreshChoiceIndices()
     {
+        var choiceIndex = 0;
         for (int i = 0; i < _outcomePorts.Count; i++)
         {
             var entry = _outcomePorts[i];
-            entry.Port.userData = new DialogFlowPortData(DialogFlowPortKind.Outcome, i);
-            entry.Port.portName = GetOutcomePortName(entry.Outcome, i);
+            if (entry.Port.userData is not DialogFlowPortData data || data.Kind != DialogFlowPortKind.Choice)
+            {
+                continue;
+            }
+
+            entry.Port.userData = new DialogFlowPortData(DialogFlowPortKind.Choice, choiceIndex);
+            entry.Port.portName = GetChoicePortName(Data.Choices[choiceIndex], choiceIndex);
             if (entry.Foldout != null)
             {
-                entry.Foldout.text = $"Outcome {i + 1}";
+                entry.Foldout.text = $"Choice {choiceIndex + 1}";
             }
+            choiceIndex++;
         }
 
         RefreshExpandedState();
         RefreshPorts();
     }
 
-    private void UpdateOutcomePortLabel(DialogFlowOutcomeData outcome)
+    private void UpdateChoicePortLabel(DialogFlowChoiceData choice)
     {
-        var index = Data.Outcomes.IndexOf(outcome);
-        if (index < 0 || index >= _outcomePorts.Count)
+        var index = Data.Choices.IndexOf(choice);
+        if (index < 0)
         {
             return;
         }
 
-        _outcomePorts[index].Port.portName = GetOutcomePortName(outcome, index);
+        var entry = _outcomePorts.FirstOrDefault(item => item.Port.userData is DialogFlowPortData data &&
+                                                         data.Kind == DialogFlowPortKind.Choice &&
+                                                         data.Index == index);
+        if (entry != null)
+        {
+            entry.Port.portName = GetChoicePortName(choice, index);
+        }
     }
+
 
     private Port AddOutputPort(string name, DialogFlowPortKind kind, int outcomeIndex = -1)
     {
@@ -240,7 +349,7 @@ public sealed class DialogFlowNodeView : Node
         port.portName = name;
         port.userData = new DialogFlowPortData(kind, outcomeIndex);
         outputContainer.Add(port);
-        if (kind != DialogFlowPortKind.Outcome)
+        if (kind != DialogFlowPortKind.Outcome && kind != DialogFlowPortKind.Choice)
         {
             _ports[$"{kind}:{outcomeIndex}"] = port;
         }
@@ -272,6 +381,16 @@ public sealed class DialogFlowNodeView : Node
         }
 
         return $"{index + 1}. {text}";
+    }
+
+    private static string GetChoicePortName(DialogFlowChoiceData choice, int index)
+    {
+        if (choice == null || string.IsNullOrWhiteSpace(choice.Text))
+        {
+            return $"Choice {index + 1}";
+        }
+
+        return choice.Text.Trim();
     }
 
     private sealed class OutcomePortEntry

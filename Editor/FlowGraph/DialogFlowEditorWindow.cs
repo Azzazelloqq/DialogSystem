@@ -43,6 +43,7 @@ public sealed class DialogFlowEditorWindow : EditorWindow
 
         var addMenu = new ToolbarMenu { text = "Add Node" };
         addMenu.menu.AppendAction("Dialog", _ => _graphView?.CreateNode(DialogFlowNodeType.Dialog));
+        addMenu.menu.AppendAction("Choice", _ => _graphView?.CreateNode(DialogFlowNodeType.Choice));
         addMenu.menu.AppendAction("Action", _ => _graphView?.CreateNode(DialogFlowNodeType.Action));
         addMenu.menu.AppendAction("End", _ => _graphView?.CreateNode(DialogFlowNodeType.End));
         toolbar.Add(addMenu);

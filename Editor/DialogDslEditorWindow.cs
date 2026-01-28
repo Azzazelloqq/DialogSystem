@@ -23,7 +23,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
     private bool _blocksFoldout = true;
     private bool _conditionsFoldout = true;
     private bool _advancedFoldout;
-    private bool _speakersFoldout = true;
+    private bool _speakersFoldout;
     private string _speakerSearch;
     private string _catalogSearch;
     private string _newSpeakerName;
@@ -464,7 +464,6 @@ public sealed class DialogDslEditorWindow : EditorWindow
         if (_blocksFoldout)
         {
             DrawPaletteItem("Line", new DragPayload(DragKind.PaletteLine));
-            DrawPaletteItem("Choice Group", new DragPayload(DragKind.PaletteChoiceGroup));
             DrawPaletteItem("Condition Group", new DragPayload(DragKind.PaletteConditionGroup));
             DrawPaletteItem("Exit (Outcome)", new DragPayload(DragKind.PaletteExit));
         }
@@ -638,68 +637,30 @@ public sealed class DialogDslEditorWindow : EditorWindow
 
     private void DrawChoiceGroup(DialogDslBlock block)
     {
-        if (block.Choices == null)
+        EditorGUILayout.HelpBox("Choice blocks are managed in the Flow Graph. Remove this block or edit choices there.",
+            MessageType.Info);
+
+        if (block.Choices == null || block.Choices.Count == 0)
         {
-            block.Choices = new List<DialogDslChoice>();
+            EditorGUILayout.LabelField("(empty choice group)");
+            return;
         }
 
         for (int i = 0; i < block.Choices.Count; i++)
         {
             var choice = block.Choices[i];
-            if (string.IsNullOrWhiteSpace(choice.Id))
+            if (choice == null)
             {
-                choice.Id = Guid.NewGuid().ToString("N");
+                continue;
             }
-            EditorGUILayout.BeginVertical("helpbox");
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField($"Choice {i + 1}", EditorStyles.boldLabel);
-            if (GUILayout.Button("Remove", GUILayout.Width(70)))
-            {
-                block.Choices.RemoveAt(i);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndVertical();
-                break;
-            }
-            EditorGUILayout.EndHorizontal();
 
-            var dropRect = GUILayoutUtility.GetRect(0, 18, GUILayout.ExpandWidth(true));
-            var target = new DropTarget(dropRect, DropTargetKind.Condition, null, -1, null, choice);
-            if (ShouldHighlight(target))
+            var label = string.IsNullOrWhiteSpace(choice.Text) ? "(empty)" : choice.Text;
+            if (!string.IsNullOrWhiteSpace(choice.Outcome))
             {
-                EditorGUI.DrawRect(dropRect, new Color(0.3f, 0.6f, 0.9f, 0.4f));
+                label = $"{label} -> {choice.Outcome}";
             }
-            GUI.Box(dropRect, "Drop condition here", EditorStyles.helpBox);
-            _dropTargets.Add(target);
 
-            if (IsLocalizationActive)
-            {
-                EditorGUILayout.LabelField("Base", choice.Text ?? string.Empty);
-                var entry = GetOrCreateChoiceLocalization(choice);
-                EditorGUI.BeginChangeCheck();
-                entry.Text = EditorGUILayout.TextField("Text", entry.Text);
-                if (EditorGUI.EndChangeCheck())
-                {
-                    MarkDraftDirty("Edit Localization");
-                }
-            }
-            else
-            {
-                choice.Text = EditorGUILayout.TextField("Text", choice.Text);
-                DrawLocalizationKeyField(choice);
-            }
-            choice.Condition = DrawConditionField("Condition", choice.Condition, null, choice);
-            choice.Outcome = EditorGUILayout.TextField("Outcome", choice.Outcome);
-            choice.StableId = EditorGUILayout.TextField("Choice Id", choice.StableId);
-            DrawTags(choice.Tags);
-            EditorGUILayout.EndVertical();
-        }
-
-        if (GUILayout.Button("Add Choice"))
-        {
-            block.Choices.Add(new DialogDslChoice
-            {
-                Id = Guid.NewGuid().ToString("N")
-            });
+            EditorGUILayout.LabelField($"- {label}");
         }
     }
 

@@ -1,0 +1,10 @@
+{
+  "name": "DialogSystem.Flow.Editor",
+  "references": [
+    "DialogSystem.Flow",
+    "DialogSystem.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ]
+}

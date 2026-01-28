@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using DialogSystem.Runtime;
 
 namespace DialogSystem.Runtime.Flow
@@ -60,15 +61,31 @@ public sealed class DialogFlowRunner
     private readonly DialogFlowAsset _flow;
     private readonly DialogRunner _dialogRunner;
     private readonly IDialogContext _context;
+    private readonly DialogAsset _defaultDialogAsset;
     private string _currentNodeId;
     private string _lastOutcome;
+    private List<DialogChoiceOption> _pendingFlowChoices;
 
     public IDialogFlowActionHandler ActionHandler { get; set; }
     public string LastError { get; private set; }
+    public string CurrentNodeId => _currentNodeId;
+    public string CurrentDialogId => _dialogRunner.CurrentDialog?.Id;
+    public string LastOutcome => _lastOutcome;
+    public bool IsWaitingForFlowChoice => _pendingFlowChoices != null;
 
-    public DialogFlowRunner(DialogFlowAsset flow, DialogAsset dialogAsset, IDialogContext context = null)
+    public DialogFlowNodeType? CurrentNodeType
+    {
+        get
+        {
+            var node = _flow?.GetNodeById(_currentNodeId);
+            return node?.Type;
+        }
+    }
+
+    public DialogFlowRunner(DialogFlowAsset flow, DialogAsset dialogAsset = null, IDialogContext context = null)
     {
         _flow = flow;
+        _defaultDialogAsset = dialogAsset;
         _context = context ?? new DialogContext();
         _dialogRunner = new DialogRunner(dialogAsset, _context);
     }
@@ -78,6 +95,7 @@ public sealed class DialogFlowRunner
         LastError = null;
         _currentNodeId = null;
         _lastOutcome = null;
+        _pendingFlowChoices = null;
 
         if (_flow == null)
         {
@@ -101,12 +119,35 @@ public sealed class DialogFlowRunner
             return DialogEvent.EndEvent();
         }
 
+        if (_pendingFlowChoices != null)
+        {
+            return SetError("Flow choice selection is required before continuing.");
+        }
+
         var dialogEvent = _dialogRunner.Advance();
         return HandleDialogEvent(dialogEvent);
     }
 
     public DialogEvent Choose(int index)
     {
+        if (_pendingFlowChoices != null)
+        {
+            if (index < 0 || index >= _pendingFlowChoices.Count)
+            {
+                return SetError("Flow choice index is out of range.");
+            }
+
+            var choice = _pendingFlowChoices[index];
+            _pendingFlowChoices = null;
+            _currentNodeId = choice.Target;
+            if (string.IsNullOrWhiteSpace(_currentNodeId))
+            {
+                return DialogEvent.EndEvent();
+            }
+
+            return EnterNode();
+        }
+
         var dialogEvent = _dialogRunner.Choose(index);
         return HandleDialogEvent(dialogEvent);
     }
@@ -122,12 +163,16 @@ public sealed class DialogFlowRunner
         switch (node.Type)
         {
             case DialogFlowNodeType.Dialog:
-                if (string.IsNullOrWhiteSpace(node.DialogId))
+                var dialogAsset = node.DialogAsset != null ? node.DialogAsset : _defaultDialogAsset;
+                if (dialogAsset == null)
                 {
-                    return SetError("Dialog node has empty dialog id.");
+                    return SetError("Dialog node has no dialog asset.");
                 }
 
-                return HandleDialogEvent(_dialogRunner.Start(node.DialogId));
+                _dialogRunner.SetAsset(dialogAsset);
+                return HandleDialogEvent(_dialogRunner.Start(null));
+            case DialogFlowNodeType.Choice:
+                return HandleChoiceNode(node);
             case DialogFlowNodeType.Action:
                 return HandleActionNode(node);
             case DialogFlowNodeType.End:
@@ -136,6 +181,34 @@ public sealed class DialogFlowRunner
             default:
                 return SetError($"Unsupported node type '{node.Type}'.");
         }
+    }
+
+    private DialogEvent HandleChoiceNode(DialogFlowNodeData node)
+    {
+        if (node.Choices == null || node.Choices.Count == 0)
+        {
+            return SetError("Choice node has no options.");
+        }
+
+        _pendingFlowChoices = new List<DialogChoiceOption>();
+        for (int i = 0; i < node.Choices.Count; i++)
+        {
+            var choice = node.Choices[i];
+            if (choice == null)
+            {
+                continue;
+            }
+
+            _pendingFlowChoices.Add(new DialogChoiceOption(choice.Text ?? string.Empty, null, null, choice.Id,
+                choice.TargetNodeId));
+        }
+
+        if (_pendingFlowChoices.Count == 0)
+        {
+            return SetError("Choice node has no valid options.");
+        }
+
+        return DialogEvent.ChoicesEvent(new DialogChoiceSet(_pendingFlowChoices));
     }
 
     private DialogEvent HandleDialogEvent(DialogEvent dialogEvent)
