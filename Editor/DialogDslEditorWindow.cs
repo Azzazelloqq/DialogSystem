@@ -773,8 +773,13 @@ public sealed class DialogDslEditorWindow : EditorWindow
     private string DrawConditionField(string label, string value, DialogDslBlock targetBlock, DialogDslChoice targetChoice)
     {
         EditorGUILayout.BeginHorizontal();
-        var rect = EditorGUILayout.GetControlRect();
-        value = EditorGUI.TextField(rect, label, value);
+        EditorGUI.BeginChangeCheck();
+        var newValue = EditorGUILayout.DelayedTextField(label, value ?? string.Empty);
+        var rect = GUILayoutUtility.GetLastRect();
+        if (EditorGUI.EndChangeCheck())
+        {
+            value = string.IsNullOrWhiteSpace(newValue) ? null : newValue.Replace("\r", " ").Replace("\n", " ");
+        }
         _dropTargets.Add(new DropTarget(rect, DropTargetKind.Condition, null, -1, targetBlock, targetChoice));
 
         EnsureConditionCache();
@@ -782,7 +787,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
         {
             var selected = GetConditionPopupIndex(value);
             var newSelected = EditorGUILayout.Popup(selected, s_conditionOptions, GUILayout.Width(160));
-            if (newSelected > 0 && newSelected - 1 < s_conditionIndexById.Count)
+            if (newSelected != selected && newSelected > 0 && newSelected - 1 < s_conditionIndexById.Count)
             {
                 value = GetConditionIdByIndex(newSelected - 1);
             }
@@ -1768,6 +1773,7 @@ public sealed class DialogDslEditorWindow : EditorWindow
             return;
         }
 
+        GUI.FocusControl(null);
         if (string.IsNullOrWhiteSpace(_draft.DslPath))
         {
             _document = DialogDslEditorParser.FromDraft(_draft);

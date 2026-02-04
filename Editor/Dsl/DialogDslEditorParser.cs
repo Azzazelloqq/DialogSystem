@@ -576,7 +576,7 @@ public static class DialogDslEditorParser
         var index = content.IndexOf($" {keyword} ", StringComparison.OrdinalIgnoreCase);
         if (index >= 0)
         {
-            return index;
+            return index + 1;
         }
 
         if (content.StartsWith($"{keyword} ", StringComparison.OrdinalIgnoreCase))
